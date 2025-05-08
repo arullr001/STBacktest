@@ -19,6 +19,7 @@ import multiprocessing as mp
 from functools import partial
 import threading
 import gc
+import copy
 
 # Data processing and numerical computations
 import numpy as np
@@ -36,6 +37,7 @@ from skopt import gp_minimize, space
 from skopt.space import Real, Integer
 from skopt.utils import use_named_args
 from bayes_opt import BayesianOptimization
+from bayes_opt import UtilityFunction
 
 # GPU acceleration
 try:
@@ -244,7 +246,6 @@ class DirectoryManager:
             raise
 
 
-
 class DataHandler:
     """Data loading and preprocessing"""
     def __init__(self, directory_manager):
@@ -271,18 +272,47 @@ class DataHandler:
             else:
                 df = pd.read_excel(filepath)
             
-            # Ensure required columns exist
-            required_columns = ['open', 'high', 'low', 'close']
-            missing_columns = [col for col in required_columns if col not in df.columns]
+            # Check for required columns with possible variations
+            required_columns = {
+                'open': ['O', 'o', 'open', 'Open', 'OPEN'],
+                'high': ['H', 'h', 'high', 'High', 'HIGH'],
+                'low': ['L', 'l', 'low', 'Low', 'LOW'],
+                'close': ['C', 'c', 'close', 'Close', 'CLOSE'],
+                'date': ['date', 'Date', 'DATE'],
+                'time': ['time', 'Time', 'TIME']
+            }
             
-            if missing_columns:
-                self.logger.error(f"Missing required columns: {missing_columns}")
-                raise ValueError(f"Missing required columns: {missing_columns}")
+            # Map columns to standard names
+            column_mapping = {}
+            for std_col, variations in required_columns.items():
+                found = False
+                for var in variations:
+                    if var in df.columns:
+                        column_mapping[var] = std_col
+                        found = True
+                        break
+                if not found:
+                    self.logger.error(f"Missing required column: {std_col} (accepted names: {variations})")
+                    raise ValueError(f"Missing required column: {std_col}")
             
-            # Convert timestamp if exists
-            if 'timestamp' in df.columns:
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
+            # Rename columns to standard names
+            df = df.rename(columns=column_mapping)
+            
+            # Combine date and time columns into timestamp
+            try:
+                if 'time' in df.columns:
+                    df['timestamp'] = pd.to_datetime(df['date'] + ' ' + df['time'])
+                else:
+                    df['timestamp'] = pd.to_datetime(df['date'])
+                
+                # Drop original date and time columns
+                df = df.drop(['date', 'time'] if 'time' in df.columns else ['date'], axis=1)
+                
+                # Set timestamp as index
                 df.set_index('timestamp', inplace=True)
+            except Exception as e:
+                self.logger.error(f"Error processing datetime: {str(e)}")
+                raise ValueError(f"Error processing datetime: {str(e)}")
             
             # Sort by index
             df.sort_index(inplace=True)
@@ -293,13 +323,41 @@ class DataHandler:
             # Forward fill missing values
             df.fillna(method='ffill', inplace=True)
             
+            # Rename columns to standard lowercase names
+            df.columns = [col.lower() for col in df.columns]
+            
+            # Verify final structure
+            required_final_cols = ['open', 'high', 'low', 'close']
+            missing_cols = [col for col in required_final_cols if col not in df.columns]
+            if missing_cols:
+                self.logger.error(f"Missing required columns after processing: {missing_cols}")
+                raise ValueError(f"Missing required columns after processing: {missing_cols}")
+            
             self.logger.info(f"Successfully loaded data with {len(df)} rows")
+            self.logger.info(f"Date range: {df.index[0]} to {df.index[-1]}")
+            
             return df
             
         except Exception as e:
             self.logger.error(f"Data loading failed: {str(e)}")
             return None
 
+    def prepare_data(self, df):
+        """Prepare data for analysis"""
+        try:
+            # Calculate basic metrics
+            df['hl2'] = (df['high'] + df['low']) / 2
+            df['returns'] = df['close'].pct_change()
+            df['log_returns'] = np.log(df['close'] / df['close'].shift(1))
+            
+            # Calculate daily volatility
+            df['volatility'] = df['returns'].rolling(window=20).std()
+            
+            return df
+            
+        except Exception as e:
+            self.logger.error(f"Data preparation failed: {str(e)}")
+            return None
 
 class SupertrendCalculator:
     """Core Supertrend calculations"""
@@ -307,10 +365,26 @@ class SupertrendCalculator:
         self.config = config
         self.logger = logging.getLogger(__name__)
 
-    def calculate_supertrend(self, df):
-        """Calculate Supertrend indicators"""
+
+
+def calculate_supertrend(self, df):
+    """Calculate Supertrend indicators"""
+    try:
+        # Validate input data
+        required_columns = ['open', 'high', 'low', 'close']
+        if not all(col in df.columns for col in required_columns):
+            self.logger.error(f"Missing required columns. Required: {required_columns}")
+            raise ValueError(f"Missing required columns. Required: {required_columns}")
+
+        # Create working copy of dataframe
+        df = df.copy()
+
+        # Calculate middle point if not exists
+        if 'hl2' not in df.columns:
+            df['hl2'] = (df['high'] + df['low']) / 2
+
+        # Calculate True Range and ATR
         try:
-            # Calculate ATR
             tr = pd.DataFrame()
             tr['hl'] = df['high'] - df['low']
             tr['hc'] = abs(df['high'] - df['close'].shift(1))
@@ -321,18 +395,31 @@ class SupertrendCalculator:
                 window=self.config.parameters['atr_period']
             ).mean()
             
-            # Calculate basic bands
+            # Handle NaN values in ATR
+            df['atr'] = df['atr'].fillna(method='bfill')
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating ATR: {str(e)}")
+            raise
+
+        # Calculate basic bands
+        try:
             df['basic_ub'] = df['hl2'] + (
                 self.config.parameters['factor'] * df['atr']
             )
             df['basic_lb'] = df['hl2'] - (
                 self.config.parameters['factor'] * df['atr']
             )
-            
-            # Calculate final bands
-            df['final_ub'] = 0.0
-            df['final_lb'] = 0.0
-            
+        except Exception as e:
+            self.logger.error(f"Error calculating basic bands: {str(e)}")
+            raise
+
+        # Initialize final bands
+        df['final_ub'] = np.nan
+        df['final_lb'] = np.nan
+        
+        # Calculate final bands using vectorized operations where possible
+        try:
             for i in range(len(df)):
                 if i == 0:
                     df['final_ub'].iat[i] = df['basic_ub'].iat[i]
@@ -340,25 +427,30 @@ class SupertrendCalculator:
                 else:
                     df['final_ub'].iat[i] = (
                         df['basic_ub'].iat[i] 
-                        if df['basic_ub'].iat[i] < df['final_ub'].iat[i-1]
-                        or df['close'].iat[i-1] > df['final_ub'].iat[i-1]
+                        if (df['basic_ub'].iat[i] < df['final_ub'].iat[i-1] or 
+                            df['close'].iat[i-1] > df['final_ub'].iat[i-1])
                         else df['final_ub'].iat[i-1]
                     )
                     
                     df['final_lb'].iat[i] = (
                         df['basic_lb'].iat[i] 
-                        if df['basic_lb'].iat[i] > df['final_lb'].iat[i-1]
-                        or df['close'].iat[i-1] < df['final_lb'].iat[i-1]
+                        if (df['basic_lb'].iat[i] > df['final_lb'].iat[i-1] or 
+                            df['close'].iat[i-1] < df['final_lb'].iat[i-1])
                         else df['final_lb'].iat[i-1]
                     )
-            
-            # Calculate Supertrend
-            df['supertrend'] = 0.0
-            df['trend'] = 1  # 1 for uptrend, -1 for downtrend
+        except Exception as e:
+            self.logger.error(f"Error calculating final bands: {str(e)}")
+            raise
+
+        # Calculate Supertrend
+        try:
+            df['supertrend'] = np.nan
+            df['trend'] = 0  # 1 for uptrend, -1 for downtrend
             
             for i in range(len(df)):
                 if i == 0:
                     df['supertrend'].iat[i] = df['final_ub'].iat[i]
+                    df['trend'].iat[i] = 1
                     continue
                 
                 if df['supertrend'].iat[i-1] == df['final_ub'].iat[i-1]:
@@ -377,15 +469,40 @@ class SupertrendCalculator:
                 # Determine trend
                 df['trend'].iat[i] = 1 if df['close'].iat[i] > df['supertrend'].iat[i] else -1
             
-            # Calculate buffer zones
+        except Exception as e:
+            self.logger.error(f"Error calculating Supertrend: {str(e)}")
+            raise
+
+        # Calculate buffer zones
+        try:
             df['upper_buffer'] = df['supertrend'] + self.config.parameters['buffer_distance']
             df['lower_buffer'] = df['supertrend'] - self.config.parameters['buffer_distance']
-            
-            return df
-            
         except Exception as e:
-            self.logger.error(f"Supertrend calculation failed: {str(e)}")
-            return None
+            self.logger.error(f"Error calculating buffer zones: {str(e)}")
+            raise
+
+        # Validate output
+        required_outputs = ['supertrend', 'trend', 'upper_buffer', 'lower_buffer']
+        if not all(col in df.columns for col in required_outputs):
+            self.logger.error(f"Missing required output columns: {required_outputs}")
+            raise ValueError(f"Missing required output columns: {required_outputs}")
+
+        # Check for NaN values
+        nan_cols = df[required_outputs].isna().sum()
+        if nan_cols.any():
+            self.logger.warning(f"NaN values found in columns: {nan_cols[nan_cols > 0]}")
+            # Forward fill NaN values
+            df[required_outputs] = df[required_outputs].fillna(method='ffill')
+            # Backward fill any remaining NaNs
+            df[required_outputs] = df[required_outputs].fillna(method='bfill')
+
+        self.logger.info("Supertrend calculation completed successfully")
+        return df
+            
+    except Exception as e:
+        self.logger.error(f"Supertrend calculation failed: {str(e)}")
+        return None
+
 			
 			
 class SupertrendStrategy:
@@ -775,117 +892,42 @@ class BacktestEngine:
             return 0
             
         return np.sqrt(252) * (excess_returns.mean() / downside_returns.std())
-		
-		
-class ParameterOptimizer:
-    """Advanced parameter optimization with ensemble approach"""
-    def __init__(self, config, directory_manager):
-        self.timestamp = "2025-05-08 01:25:06"
-        self.user = "arullr001"
-        self.config = config
-        self.dir_manager = directory_manager
-        self.logger = logging.getLogger(__name__)
-        
-        # Define parameter spaces with correct ranges and steps
-        self.param_spaces = {
-            'atr_period': {
-                'min': 10,
-                'max': 100,
-                'step': 5
-            },
-            'factor': {
-                'min': 2.0,
-                'max': 20.0,
-                'step': 0.1
-            },
-            'buffer_distance': {
-                'min': 30,
-                'max': 200,
-                'step': 1
-            },
-            'hard_stop_distance': {
-                'min': 10,
-                'max': 50,
-                'step': 1
-            },
-            'long_target_rr': {
-                'min': 0,
-                'max': 5.0,
-                'step': 0.1
-            },
-            'short_target_rr': {
-                'min': 0,
-                'max': 5.0,
-                'step': 0.1
-            }
-        }
 
-    def optimize(self, data, method='ensemble', n_trials=100):
-        """Run optimization with specified method"""
+def bayesian_optimization(self, data, n_trials):
+    """Bayesian optimization implementation"""
+    def objective(atr_period, factor, buffer_distance, 
+                 hard_stop_distance, long_target_rr, short_target_rr):
         try:
-            self.logger.info(f"Starting parameter optimization using {method} method")
-            
-            optimization_results = {
-                'timestamp': self.timestamp,
-                'user': self.user,
-                'method': method,
-                'results': {}
+            # Round parameters to nearest step
+            params = {
+                'atr_period': round(atr_period / 5) * 5,
+                'factor': round(factor * 10) / 10,
+                'buffer_distance': round(buffer_distance),
+                'hard_stop_distance': round(hard_stop_distance),
+                'long_target_rr': round(long_target_rr * 10) / 10,
+                'short_target_rr': round(short_target_rr * 10) / 10
             }
             
-            if method in ['ensemble', 'bayesian']:
-                bayes_results = self.bayesian_optimization(data, n_trials)
-                optimization_results['results']['bayesian'] = bayes_results
-                
-            if method in ['ensemble', 'optuna']:
-                optuna_results = self.optuna_optimization(data, n_trials)
-                optimization_results['results']['optuna'] = optuna_results
-                
-            if method == 'ensemble':
-                ensemble_results = self.ensemble_optimization(
-                    optimization_results['results']
-                )
-                optimization_results['results']['ensemble'] = ensemble_results
+            # Update config and run backtest
+            test_config = copy.deepcopy(self.config)
+            test_config.update_parameters(params)
             
-            # Save optimization results
-            self.save_optimization_results(optimization_results)
+            backtest_engine = BacktestEngine(
+                test_config,
+                self.dir_manager
+            )
             
-            return optimization_results
+            results = backtest_engine.run_backtest(data)
+            if results is None or results['metrics'] is None:
+                return float('-inf')
+                
+            return self.calculate_objective_score(results['metrics'])
             
         except Exception as e:
-            self.logger.error(f"Optimization failed: {str(e)}")
-            return None
+            self.logger.error(f"Bayesian optimization iteration failed: {str(e)}")
+            return float('-inf')
 
-    def bayesian_optimization(self, data, n_trials):
-        """Bayesian optimization implementation"""
-        def objective(atr_period, factor, buffer_distance, 
-                     hard_stop_distance, long_target_rr, short_target_rr):
-            try:
-                # Round parameters to nearest step
-                params = {
-                    'atr_period': round(atr_period / 5) * 5,
-                    'factor': round(factor * 10) / 10,
-                    'buffer_distance': round(buffer_distance),
-                    'hard_stop_distance': round(hard_stop_distance),
-                    'long_target_rr': round(long_target_rr * 10) / 10,
-                    'short_target_rr': round(short_target_rr * 10) / 10
-                }
-                
-                # Update config and run backtest
-                test_config = copy.deepcopy(self.config)
-                test_config.update_parameters(params)
-                
-                backtest_engine = BacktestEngine(
-                    test_config,
-                    self.dir_manager
-                )
-                
-                results = backtest_engine.run_backtest(data)
-                return self.calculate_objective_score(results['metrics'])
-                
-            except Exception as e:
-                self.logger.error(f"Bayesian optimization iteration failed: {str(e)}")
-                return float('-inf')
-
+    try:
         optimizer = BayesianOptimization(
             f=objective,
             pbounds={
@@ -916,18 +958,37 @@ class ParameterOptimizer:
             },
             random_state=42
         )
+
+        # Set up utility function (acquisition function)
+        from bayes_opt import UtilityFunction
+        utility = UtilityFunction(kind="ei", kappa=2.5, xi=0.0)
         
+        # Initialize with random points
+        init_points = n_trials // 4
+        n_iter = n_trials - init_points
+        
+        self.logger.info(f"Starting Bayesian optimization with {init_points} initial points and {n_iter} iterations")
+        
+        # Perform optimization
         optimizer.maximize(
-            init_points=n_trials // 4,
-            n_iter=n_trials,
-            acq='ei'
+            init_points=init_points,
+            n_iter=n_iter,
+            acquisition_function=utility
         )
+        
+        self.logger.info("Bayesian optimization completed successfully")
         
         return {
             'best_params': optimizer.max['params'],
             'best_score': optimizer.max['target'],
             'all_results': optimizer.space.params
         }
+        
+    except Exception as e:
+        self.logger.error(f"Bayesian optimization setup failed: {str(e)}")
+        raise
+
+
 
     def optuna_optimization(self, data, n_trials):
         """Optuna optimization implementation"""
@@ -1076,6 +1137,180 @@ class ParameterOptimizer:
             json.dump(results, f, indent=4)
 
 
+class ParameterOptimizer:
+    def __init__(self, config, directory_manager):
+        self.timestamp = "2025-05-08 02:42:16"
+        self.user = "arullr001"
+        self.config = config
+        self.dir_manager = directory_manager
+        self.logger = logging.getLogger(__name__)
+        
+        # Define parameter spaces
+        self.param_spaces = {
+            'atr_period': {
+                'min': 10,
+                'max': 100,
+                'step': 5
+            },
+            'factor': {
+                'min': 2.0,
+                'max': 20.0,
+                'step': 0.1
+            },
+            'buffer_distance': {
+                'min': 30,
+                'max': 200,
+                'step': 1
+            },
+            'hard_stop_distance': {
+                'min': 10,
+                'max': 50,
+                'step': 1
+            },
+            'long_target_rr': {
+                'min': 0,
+                'max': 5.0,
+                'step': 0.1
+            },
+            'short_target_rr': {
+                'min': 0,
+                'max': 5.0,
+                'step': 0.1
+            }
+        }
+
+    def optimize(self, data, method='ensemble', n_trials=100):
+        """Run optimization with specified method"""
+        try:
+            self.logger.info(f"Starting parameter optimization using {method} method")
+            
+            optimization_results = {
+                'timestamp': self.timestamp,
+                'user': self.user,
+                'method': method,
+                'results': {}
+            }
+            
+            if method in ['ensemble', 'bayesian']:
+                bayes_results = self.run_bayesian_optimization(data, n_trials)
+                optimization_results['results']['bayesian'] = bayes_results
+                
+            if method in ['ensemble', 'optuna']:
+                optuna_results = self.optuna_optimization(data, n_trials)
+                optimization_results['results']['optuna'] = optuna_results
+                
+            if method == 'ensemble':
+                ensemble_results = self.ensemble_optimization(
+                    optimization_results['results']
+                )
+                optimization_results['results']['ensemble'] = ensemble_results
+            
+            # Save optimization results
+            self.save_optimization_results(optimization_results)
+            
+            return optimization_results
+            
+        except Exception as e:
+            self.logger.error(f"Optimization failed: {str(e)}")
+            return None
+
+    def run_bayesian_optimization(self, data, n_trials):  # Changed method name from bayesian_optimization
+        """Bayesian optimization implementation"""
+        def objective(atr_period, factor, buffer_distance, 
+                     hard_stop_distance, long_target_rr, short_target_rr):
+            try:
+                # Round parameters to nearest step
+                params = {
+                    'atr_period': round(atr_period / 5) * 5,
+                    'factor': round(factor * 10) / 10,
+                    'buffer_distance': round(buffer_distance),
+                    'hard_stop_distance': round(hard_stop_distance),
+                    'long_target_rr': round(long_target_rr * 10) / 10,
+                    'short_target_rr': round(short_target_rr * 10) / 10
+                }
+                
+                # Update config and run backtest
+                test_config = copy.deepcopy(self.config)
+                test_config.update_parameters(params)
+                
+                backtest_engine = BacktestEngine(
+                    test_config,
+                    self.dir_manager
+                )
+                
+                results = backtest_engine.run_backtest(data)
+                if results is None or results['metrics'] is None:
+                    return float('-inf')
+                    
+                return self.calculate_objective_score(results['metrics'])
+                
+            except Exception as e:
+                self.logger.error(f"Bayesian optimization iteration failed: {str(e)}")
+                return float('-inf')
+
+        try:
+            optimizer = BayesianOptimization(
+                f=objective,
+                pbounds={
+                    'atr_period': (
+                        self.param_spaces['atr_period']['min'],
+                        self.param_spaces['atr_period']['max']
+                    ),
+                    'factor': (
+                        self.param_spaces['factor']['min'],
+                        self.param_spaces['factor']['max']
+                    ),
+                    'buffer_distance': (
+                        self.param_spaces['buffer_distance']['min'],
+                        self.param_spaces['buffer_distance']['max']
+                    ),
+                    'hard_stop_distance': (
+                        self.param_spaces['hard_stop_distance']['min'],
+                        self.param_spaces['hard_stop_distance']['max']
+                    ),
+                    'long_target_rr': (
+                        self.param_spaces['long_target_rr']['min'],
+                        self.param_spaces['long_target_rr']['max']
+                    ),
+                    'short_target_rr': (
+                        self.param_spaces['short_target_rr']['min'],
+                        self.param_spaces['short_target_rr']['max']
+                    )
+                },
+                random_state=42
+            )
+
+            # Set up utility function (acquisition function)
+            from bayes_opt import UtilityFunction
+            utility = UtilityFunction(kind="ei", kappa=2.5, xi=0.0)
+            
+            # Initialize with random points
+            init_points = n_trials // 4
+            n_iter = n_trials - init_points
+            
+            self.logger.info(f"Starting Bayesian optimization with {init_points} initial points and {n_iter} iterations")
+            
+            # Perform optimization
+            optimizer.maximize(
+                init_points=init_points,
+                n_iter=n_iter,
+                acquisition_function=utility
+            )
+            
+            self.logger.info("Bayesian optimization completed successfully")
+            
+            return {
+                'best_params': optimizer.max['params'],
+                'best_score': optimizer.max['target'],
+                'all_results': optimizer.space.params
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Bayesian optimization setup failed: {str(e)}")
+            raise
+
+
+
 def main():
     """Main execution flow"""
     try:
@@ -1085,7 +1320,7 @@ def main():
         
         # Initialize components
         dir_manager = DirectoryManager()
-        config = SupertrendConfig()
+        config = SupertrendConfig()  # This was missing
         
         # Load data
         data_handler = DataHandler(dir_manager)
@@ -1095,8 +1330,8 @@ def main():
         print("Please provide the full path to your OHLC data file")
         print("Supported formats: .csv, .xlsx, .xls")
         print("Example: C:/Users/username/data/BTCUSDT_1h.csv")
-        print("\nRequired columns: open, high, low, close")
-        print("Optional column: timestamp")
+        print("\nRequired columns: open/O, high/H, low/L, close/C")
+        print("Optional: date, time, volume")
         
         while True:
             data_path = input("\nEnter the path to your OHLC data file: ").strip()
@@ -1122,11 +1357,153 @@ def main():
             if choice != '1':
                 print("\nExiting program...")
                 return False
+        
+        print(f"\nSuccessfully loaded {len(df)} bars of data")
+        print(f"Date range: {df.index[0]} to {df.index[-1]}")
+        
+        # Display data sample
+        print("\nFirst few rows of data:")
+        print(df.head())
+        
+        # Ask for confirmation
+        print("\nIs this the correct data?")
+        confirm = input("Continue? (y/n): ").strip().lower()
+        if confirm != 'y':
+            print("\nExiting program...")
+            return False
+
+        # Optimization setup
+        print("\nOptimization Setup:")
+        print("-" * 50)
+        n_trials = int(input("Enter number of optimization trials (default 100): ") or "100")
+        
+        print("\nOptimization Methods:")
+        print("1. Ensemble (combines results from all methods)")
+        print("2. Bayesian")
+        print("3. Optuna")
+        print("4. Run All Methods")
+        
+        method_choice = int(input("\nSelect optimization method (1-4): "))
+        
+        if method_choice == 4:
+            optimization_methods = ['bayesian', 'optuna', 'ensemble']
+            print("\nRunning all optimization methods sequentially...")
+        else:
+            optimization_methods = [['ensemble', 'bayesian', 'optuna'][method_choice - 1]]
+        
+        # Initialize optimizer
+        optimizer = ParameterOptimizer(config, dir_manager)
+        all_results = {}
+        
+        # Run selected optimization methods
+        for method in optimization_methods:
+            print(f"\nRunning {method.capitalize()} Optimization:")
+            print("-" * 50)
+            print(f"Starting {method} optimization with {n_trials} trials...")
+            
+            optimization_results = optimizer.optimize(
+                df,
+                method=method,
+                n_trials=n_trials
+            )
+            
+            if optimization_results is None:
+                print(f"\n{method.capitalize()} optimization failed!")
+                continue
+                
+            all_results[method] = optimization_results
+            
+            # Display results for this method
+            best_params = (optimization_results['results']['ensemble']['best_params'] 
+                         if method == 'ensemble' 
+                         else optimization_results['results'][method]['best_params'])
+            
+            best_score = (optimization_results['results']['ensemble']['best_score']
+                         if method == 'ensemble'
+                         else optimization_results['results'][method]['best_score'])
+            
+            print(f"\n{method.capitalize()} Optimization Results:")
+            print("-" * 50)
+            print(f"Best Score: {best_score:.2f}")
+            print("\nBest Parameters:")
+            for param, value in best_params.items():
+                print(f"{param}: {value}")
+        
+        # Rest of the function remains the same...
+        # If all methods were run, show comparison
+        if len(all_results) > 1:
+            print("\nOptimization Methods Comparison:")
+            print("-" * 50)
+            comparison_data = []
+            
+            for method, results in all_results.items():
+                if method == 'ensemble':
+                    score = results['results']['ensemble']['best_score']
+                else:
+                    score = results['results'][method]['best_score']
+                comparison_data.append((method, score))
+            
+            # Sort by score
+            comparison_data.sort(key=lambda x: x[1], reverse=True)
+            
+            print("\nRanking by Performance:")
+            for i, (method, score) in enumerate(comparison_data, 1):
+                print(f"{i}. {method.capitalize()}: {score:.2f}")
+        
+        # Ask which method's parameters to use for final backtest
+        if len(all_results) > 1:
+            print("\nSelect parameters to use for final backtest:")
+            for i, method in enumerate(all_results.keys(), 1):
+                print(f"{i}. {method.capitalize()}")
+            
+            final_choice = int(input("\nEnter your choice (1-{0}): ".format(len(all_results))))
+            final_method = list(all_results.keys())[final_choice - 1]
+            
+            best_params = (all_results[final_method]['results']['ensemble']['best_params']
+                         if final_method == 'ensemble'
+                         else all_results[final_method]['results'][final_method]['best_params'])
+        else:
+            best_params = (optimization_results['results']['ensemble']['best_params']
+                         if method == 'ensemble'
+                         else optimization_results['results'][method]['best_params'])
+        
+        # Run final backtest
+        print("\nRunning Final Backtest:")
+        print("-" * 50)
+        
+        config.update_parameters(best_params)
+        backtest_engine = BacktestEngine(config, dir_manager)
+        final_results = backtest_engine.run_backtest(df)
+        
+        if final_results is None:
+            raise ValueError("Final backtest failed")
+        
+        # Display final results
+        print("\nFinal Performance Metrics:")
+        print("-" * 50)
+        metrics = final_results['metrics']
+        print(f"Total Return: {metrics['total_return']:.2f}%")
+        print(f"Sharpe Ratio: {metrics['sharpe_ratio']:.2f}")
+        print(f"Max Drawdown: {metrics['max_drawdown']:.2f}%")
+        print(f"Win Rate: {metrics['win_rate']*100:.2f}%")
+        print(f"Profit Factor: {metrics['profit_factor']:.2f}")
+        print(f"Total Trades: {metrics['total_trades']}")
+        
+        # Save results
+        save_path = os.path.join(dir_manager.base_dir, 'final_results')
+        print(f"\nResults saved in: {save_path}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"\nError: {str(e)}")
+        traceback.print_exc()
+        return False
 
 
 if __name__ == "__main__":
     # Set the timestamp and user globally
-    CURRENT_UTC = "2025-05-08 01:44:11"
+    CURRENT_UTC = "2025-05-08 01:48:16"
     CURRENT_USER = "arullr001"
     
     try:
