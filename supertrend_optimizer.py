@@ -182,9 +182,9 @@ class SupertrendConfig:
 class DirectoryManager:
     """Directory management and logging setup"""
     def __init__(self, base_dir="Supertrend_Strategy"):
-        self.timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")  # Changed format
+        self.timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         self.user = "arullr001"
-        self.base_dir = f"{base_dir}_{self.timestamp}"  # Will create: Supertrend_Strategy_20250508_013136
+        self.base_dir = f"{base_dir}_{self.timestamp}"
         
         # Directory structure
         self.dirs = {
@@ -195,18 +195,15 @@ class DirectoryManager:
             'optimization': os.path.join(self.base_dir, "optimization")
         }
         
-        self.setup_directories()
+        # Create base directory first
+        os.makedirs(self.base_dir, exist_ok=True)
+        os.makedirs(self.dirs['logs'], exist_ok=True)
+        
+        # Setup logging first
         self.setup_logging()
-
-    def setup_directories(self):
-        """Create directory structure"""
-        try:
-            for dir_path in self.dirs.values():
-                os.makedirs(dir_path, exist_ok=True)
-                self.logger.info(f"Created directory: {dir_path}")
-        except Exception as e:
-            self.logger.error(f"Failed to create directories: {str(e)}")
-            raise
+        
+        # Then create other directories
+        self.setup_directories()
 
     def setup_logging(self):
         """Configure logging system"""
@@ -214,20 +211,38 @@ class DirectoryManager:
         log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         
         try:
-            logging.basicConfig(
-                level=logging.INFO,
-                format=log_format,
-                handlers=[
-                    logging.FileHandler(
-                        os.path.join(self.dirs['logs'], 'strategy.log')
-                    ),
-                    logging.StreamHandler()
-                ]
+            # Create a file handler
+            file_handler = logging.FileHandler(
+                os.path.join(self.dirs['logs'], 'strategy.log')
             )
+            file_handler.setFormatter(logging.Formatter(log_format))
+            
+            # Create a console handler
+            console_handler = logging.StreamHandler()
+            console_handler.setFormatter(logging.Formatter(log_format))
+            
+            # Configure logger
+            self.logger.setLevel(logging.INFO)
+            self.logger.addHandler(file_handler)
+            self.logger.addHandler(console_handler)
+            
+            self.logger.info("Logging system initialized")
+            
         except Exception as e:
             print(f"Failed to setup logging: {str(e)}")
             raise
 
+    def setup_directories(self):
+        """Create directory structure"""
+        try:
+            for dir_name, dir_path in self.dirs.items():
+                if dir_name != 'logs':  # logs directory already created
+                    os.makedirs(dir_path, exist_ok=True)
+                    self.logger.info(f"Created directory: {dir_path}")
+                    
+        except Exception as e:
+            self.logger.error(f"Failed to create directories: {str(e)}")
+            raise
 
 class DataHandler:
     """Data loading and preprocessing"""
