@@ -503,98 +503,114 @@ class SupertrendStrategy:
         self.calculator = SupertrendCalculator(config)
         self.logger = logging.getLogger(__name__)
 
-    def generate_signals(self, df):
-        """Generate trading signals"""
-        try:
-            # Calculate Supertrend indicators
-            df = self.calculator.calculate_supertrend(df)
+
+
+def generate_signals(self, df):
+    """Generate trading signals"""
+    try:
+        # Calculate Supertrend indicators
+        df = self.calculator.calculate_supertrend(df)
+        if df is None:
+            return None
             
-            # Initialize signal columns
-            df['long_entry'] = False
-            df['short_entry'] = False
-            df['long_exit'] = False
-            df['short_exit'] = False
-            df['position'] = 0
+        # Initialize signal and tracking columns
+        df['long_entry'] = False
+        df['short_entry'] = False
+        df['long_exit'] = False
+        df['short_exit'] = False
+        df['position'] = 0
+        df['entry_price'] = 0.0  # Initialize entry_price
+        df['stop_loss'] = 0.0    # Initialize stop_loss
+        
+        # Generate signals
+        for i in range(1, len(df)):
+            # Long entry conditions
+            df.loc[df.index[i], 'long_entry'] = (
+                df['trend'].iloc[i] == 1 and
+                df['trend'].iloc[i-1] == -1 and
+                df['close'].iloc[i] <= df['upper_buffer'].iloc[i]
+            )
             
-            # Generate signals
-            for i in range(1, len(df)):
-                # Long entry conditions
-                df.loc[df.index[i], 'long_entry'] = (
-                    df['trend'].iloc[i] == 1 and
-                    df['trend'].iloc[i-1] == -1 and
-                    df['close'].iloc[i] <= df['upper_buffer'].iloc[i]
-                )
-                
-                # Short entry conditions
-                df.loc[df.index[i], 'short_entry'] = (
-                    df['trend'].iloc[i] == -1 and
-                    df['trend'].iloc[i-1] == 1 and
-                    df['close'].iloc[i] >= df['lower_buffer'].iloc[i]
-                )
-                
-                # Exit conditions
-                if df['position'].iloc[i-1] == 1:  # Long position
-                    # Exit long if:
-                    # 1. Trend changes (if target_rr is 0)
-                    # 2. Target reached (if target_rr > 0)
-                    # 3. Stop loss hit
+            # Short entry conditions
+            df.loc[df.index[i], 'short_entry'] = (
+                df['trend'].iloc[i] == -1 and
+                df['trend'].iloc[i-1] == 1 and
+                df['close'].iloc[i] >= df['lower_buffer'].iloc[i]
+            )
+            
+            # Exit conditions
+            if df['position'].iloc[i-1] == 1:  # Long position
+                # Exit long if:
+                # 1. Trend changes (if target_rr is 0)
+                # 2. Target reached (if target_rr > 0)
+                # 3. Stop loss hit
+                if df['entry_price'].iloc[i-1] > 0:  # Check if we have a valid entry price
+                    target_price = df['entry_price'].iloc[i-1] + (
+                        (df['entry_price'].iloc[i-1] - df['stop_loss'].iloc[i-1]) * 
+                        self.config.parameters['long_target_rr']
+                    )
+                    
                     df.loc[df.index[i], 'long_exit'] = (
                         (self.config.parameters['long_target_rr'] == 0 and 
                          df['trend'].iloc[i] == -1) or
                         (self.config.parameters['long_target_rr'] > 0 and
-                         df['high'].iloc[i] >= df['entry_price'].iloc[i-1] + 
-                         (df['entry_price'].iloc[i-1] - df['stop_loss'].iloc[i-1]) * 
-                         self.config.parameters['long_target_rr']) or
+                         df['high'].iloc[i] >= target_price) or
                         df['low'].iloc[i] <= df['stop_loss'].iloc[i-1]
                     )
-                
-                elif df['position'].iloc[i-1] == -1:  # Short position
-                    # Exit short if:
-                    # 1. Trend changes (if target_rr is 0)
-                    # 2. Target reached (if target_rr > 0)
-                    # 3. Stop loss hit
+            
+            elif df['position'].iloc[i-1] == -1:  # Short position
+                # Exit short if:
+                # 1. Trend changes (if target_rr is 0)
+                # 2. Target reached (if target_rr > 0)
+                # 3. Stop loss hit
+                if df['entry_price'].iloc[i-1] > 0:  # Check if we have a valid entry price
+                    target_price = df['entry_price'].iloc[i-1] - (
+                        (df['stop_loss'].iloc[i-1] - df['entry_price'].iloc[i-1]) * 
+                        self.config.parameters['short_target_rr']
+                    )
+                    
                     df.loc[df.index[i], 'short_exit'] = (
                         (self.config.parameters['short_target_rr'] == 0 and 
                          df['trend'].iloc[i] == 1) or
                         (self.config.parameters['short_target_rr'] > 0 and
-                         df['low'].iloc[i] <= df['entry_price'].iloc[i-1] - 
-                         (df['stop_loss'].iloc[i-1] - df['entry_price'].iloc[i-1]) * 
-                         self.config.parameters['short_target_rr']) or
+                         df['low'].iloc[i] <= target_price) or
                         df['high'].iloc[i] >= df['stop_loss'].iloc[i-1]
                     )
-                
-                # Update position
-                if df['long_entry'].iloc[i]:
-                    df.loc[df.index[i], 'position'] = 1
-                    df.loc[df.index[i], 'entry_price'] = df['close'].iloc[i]
-                    df.loc[df.index[i], 'stop_loss'] = (
-                        df['entry_price'].iloc[i] - 
-                        self.config.parameters['hard_stop_distance']
-                    )
-                
-                elif df['short_entry'].iloc[i]:
-                    df.loc[df.index[i], 'position'] = -1
-                    df.loc[df.index[i], 'entry_price'] = df['close'].iloc[i]
-                    df.loc[df.index[i], 'stop_loss'] = (
-                        df['entry_price'].iloc[i] + 
-                        self.config.parameters['hard_stop_distance']
-                    )
-                
-                elif df['long_exit'].iloc[i] or df['short_exit'].iloc[i]:
-                    df.loc[df.index[i], 'position'] = 0
-                    df.loc[df.index[i], 'entry_price'] = 0
-                    df.loc[df.index[i], 'stop_loss'] = 0
-                
-                else:
-                    df.loc[df.index[i], 'position'] = df['position'].iloc[i-1]
-                    df.loc[df.index[i], 'entry_price'] = df['entry_price'].iloc[i-1]
-                    df.loc[df.index[i], 'stop_loss'] = df['stop_loss'].iloc[i-1]
             
-            return df
+            # Update position and prices
+            if df['long_entry'].iloc[i]:
+                df.loc[df.index[i], 'position'] = 1
+                df.loc[df.index[i], 'entry_price'] = df['close'].iloc[i]
+                df.loc[df.index[i], 'stop_loss'] = (
+                    df['entry_price'].iloc[i] - 
+                    self.config.parameters['hard_stop_distance']
+                )
             
-        except Exception as e:
-            self.logger.error(f"Signal generation failed: {str(e)}")
-            return None
+            elif df['short_entry'].iloc[i]:
+                df.loc[df.index[i], 'position'] = -1
+                df.loc[df.index[i], 'entry_price'] = df['close'].iloc[i]
+                df.loc[df.index[i], 'stop_loss'] = (
+                    df['entry_price'].iloc[i] + 
+                    self.config.parameters['hard_stop_distance']
+                )
+            
+            elif df['long_exit'].iloc[i] or df['short_exit'].iloc[i]:
+                df.loc[df.index[i], 'position'] = 0
+                df.loc[df.index[i], 'entry_price'] = 0
+                df.loc[df.index[i], 'stop_loss'] = 0
+            
+            else:
+                df.loc[df.index[i], 'position'] = df['position'].iloc[i-1]
+                df.loc[df.index[i], 'entry_price'] = df['entry_price'].iloc[i-1]
+                df.loc[df.index[i], 'stop_loss'] = df['stop_loss'].iloc[i-1]
+        
+        return df
+        
+    except Exception as e:
+        self.logger.error(f"Signal generation failed: {str(e)}")
+        return None
+
+
 
     def validate_signals(self, df):
         """Validate generated signals"""
@@ -647,8 +663,9 @@ class SupertrendStrategy:
         except Exception as e:
             self.logger.error(f"Signal validation failed: {str(e)}")
             return None
-			
-			
+
+
+
 class BacktestEngine:
     """Advanced backtesting engine with performance analysis"""
     def __init__(self, config, directory_manager):
