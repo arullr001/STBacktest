@@ -367,144 +367,133 @@ class SupertrendCalculator:
 
 
 
-def calculate_supertrend(self, df):
-    """Calculate Supertrend indicators"""
-    try:
-        # Validate input data
-        required_columns = ['open', 'high', 'low', 'close']
-        if not all(col in df.columns for col in required_columns):
-            self.logger.error(f"Missing required columns. Required: {required_columns}")
-            raise ValueError(f"Missing required columns. Required: {required_columns}")
+class SupertrendCalculator:
+    """Core Supertrend calculations"""
+    def __init__(self, config):
+        self.config = config
+        self.logger = logging.getLogger(__name__)
 
-        # Create working copy of dataframe
-        df = df.copy()
-
-        # Calculate middle point if not exists
-        if 'hl2' not in df.columns:
-            df['hl2'] = (df['high'] + df['low']) / 2
-
-        # Calculate True Range and ATR
+    def calculate_supertrend(self, df):  # Fix the indentation of this method
+        """Calculate Supertrend indicators"""
         try:
-            tr = pd.DataFrame()
-            tr['hl'] = df['high'] - df['low']
-            tr['hc'] = abs(df['high'] - df['close'].shift(1))
-            tr['lc'] = abs(df['low'] - df['close'].shift(1))
-            tr['tr'] = tr[['hl', 'hc', 'lc']].max(axis=1)
-            
-            df['atr'] = tr['tr'].rolling(
-                window=self.config.parameters['atr_period']
-            ).mean()
-            
-            # Handle NaN values in ATR
-            df['atr'] = df['atr'].fillna(method='bfill')
-            
-        except Exception as e:
-            self.logger.error(f"Error calculating ATR: {str(e)}")
-            raise
+            # Validate input data
+            required_columns = ['open', 'high', 'low', 'close']
+            if not all(col in df.columns for col in required_columns):
+                self.logger.error(f"Missing required columns. Required: {required_columns}")
+                raise ValueError(f"Missing required columns. Required: {required_columns}")
 
-        # Calculate basic bands
-        try:
-            df['basic_ub'] = df['hl2'] + (
-                self.config.parameters['factor'] * df['atr']
-            )
-            df['basic_lb'] = df['hl2'] - (
-                self.config.parameters['factor'] * df['atr']
-            )
-        except Exception as e:
-            self.logger.error(f"Error calculating basic bands: {str(e)}")
-            raise
+            # Create working copy of dataframe
+            df = df.copy()
 
-        # Initialize final bands
-        df['final_ub'] = np.nan
-        df['final_lb'] = np.nan
-        
-        # Calculate final bands using vectorized operations where possible
-        try:
-            for i in range(len(df)):
-                if i == 0:
-                    df['final_ub'].iat[i] = df['basic_ub'].iat[i]
-                    df['final_lb'].iat[i] = df['basic_lb'].iat[i]
-                else:
-                    df['final_ub'].iat[i] = (
-                        df['basic_ub'].iat[i] 
-                        if (df['basic_ub'].iat[i] < df['final_ub'].iat[i-1] or 
-                            df['close'].iat[i-1] > df['final_ub'].iat[i-1])
-                        else df['final_ub'].iat[i-1]
-                    )
+            # Calculate middle point if not exists
+            if 'hl2' not in df.columns:
+                df['hl2'] = (df['high'] + df['low']) / 2
+
+            # Calculate True Range and ATR
+            try:
+                tr = pd.DataFrame()
+                tr['hl'] = df['high'] - df['low']
+                tr['hc'] = abs(df['high'] - df['close'].shift(1))
+                tr['lc'] = abs(df['low'] - df['close'].shift(1))
+                tr['tr'] = tr[['hl', 'hc', 'lc']].max(axis=1)
+                
+                df['atr'] = tr['tr'].rolling(
+                    window=self.config.parameters['atr_period']
+                ).mean()
+                
+                # Handle NaN values in ATR
+                df['atr'] = df['atr'].fillna(method='bfill')
+                
+            except Exception as e:
+                self.logger.error(f"Error calculating ATR: {str(e)}")
+                raise
+
+            # Calculate basic bands
+            try:
+                df['basic_ub'] = df['hl2'] + (
+                    self.config.parameters['factor'] * df['atr']
+                )
+                df['basic_lb'] = df['hl2'] - (
+                    self.config.parameters['factor'] * df['atr']
+                )
+            except Exception as e:
+                self.logger.error(f"Error calculating basic bands: {str(e)}")
+                raise
+
+            # Initialize final bands
+            df['final_ub'] = 0.0
+            df['final_lb'] = 0.0
+            
+            # Calculate final bands using vectorized operations where possible
+            try:
+                for i in range(len(df)):
+                    if i == 0:
+                        df['final_ub'].iat[i] = df['basic_ub'].iat[i]
+                        df['final_lb'].iat[i] = df['basic_lb'].iat[i]
+                    else:
+                        df['final_ub'].iat[i] = (
+                            df['basic_ub'].iat[i] 
+                            if (df['basic_ub'].iat[i] < df['final_ub'].iat[i-1] or 
+                                df['close'].iat[i-1] > df['final_ub'].iat[i-1])
+                            else df['final_ub'].iat[i-1]
+                        )
+                        
+                        df['final_lb'].iat[i] = (
+                            df['basic_lb'].iat[i] 
+                            if (df['basic_lb'].iat[i] > df['final_lb'].iat[i-1] or 
+                                df['close'].iat[i-1] < df['final_lb'].iat[i-1])
+                            else df['final_lb'].iat[i-1]
+                        )
+            except Exception as e:
+                self.logger.error(f"Error calculating final bands: {str(e)}")
+                raise
+
+            # Calculate Supertrend
+            try:
+                df['supertrend'] = 0.0
+                df['trend'] = 0  # 1 for uptrend, -1 for downtrend
+                
+                for i in range(len(df)):
+                    if i == 0:
+                        df['supertrend'].iat[i] = df['final_ub'].iat[i]
+                        df['trend'].iat[i] = 1
+                        continue
                     
-                    df['final_lb'].iat[i] = (
-                        df['basic_lb'].iat[i] 
-                        if (df['basic_lb'].iat[i] > df['final_lb'].iat[i-1] or 
-                            df['close'].iat[i-1] < df['final_lb'].iat[i-1])
-                        else df['final_lb'].iat[i-1]
-                    )
-        except Exception as e:
-            self.logger.error(f"Error calculating final bands: {str(e)}")
-            raise
-
-        # Calculate Supertrend
-        try:
-            df['supertrend'] = np.nan
-            df['trend'] = 0  # 1 for uptrend, -1 for downtrend
-            
-            for i in range(len(df)):
-                if i == 0:
-                    df['supertrend'].iat[i] = df['final_ub'].iat[i]
-                    df['trend'].iat[i] = 1
-                    continue
+                    if df['close'].iat[i-1] <= df['supertrend'].iat[i-1]:
+                        df['supertrend'].iat[i] = df['final_ub'].iat[i]
+                    else:
+                        df['supertrend'].iat[i] = df['final_lb'].iat[i]
+                    
+                    # Determine trend
+                    df['trend'].iat[i] = 1 if df['close'].iat[i] > df['supertrend'].iat[i] else -1
                 
-                if df['supertrend'].iat[i-1] == df['final_ub'].iat[i-1]:
-                    df['supertrend'].iat[i] = (
-                        df['final_ub'].iat[i] 
-                        if df['close'].iat[i] <= df['final_ub'].iat[i]
-                        else df['final_lb'].iat[i]
-                    )
-                else:
-                    df['supertrend'].iat[i] = (
-                        df['final_lb'].iat[i] 
-                        if df['close'].iat[i] >= df['final_lb'].iat[i]
-                        else df['final_ub'].iat[i]
-                    )
+            except Exception as e:
+                self.logger.error(f"Error calculating Supertrend: {str(e)}")
+                raise
+
+            # Calculate buffer zones
+            try:
+                df['upper_buffer'] = df['supertrend'] + self.config.parameters['buffer_distance']
+                df['lower_buffer'] = df['supertrend'] - self.config.parameters['buffer_distance']
+            except Exception as e:
+                self.logger.error(f"Error calculating buffer zones: {str(e)}")
+                raise
+
+            # Validate output
+            required_outputs = ['supertrend', 'trend', 'upper_buffer', 'lower_buffer']
+            if not all(col in df.columns for col in required_outputs):
+                self.logger.error(f"Missing required output columns: {required_outputs}")
+                raise ValueError(f"Missing required output columns: {required_outputs}")
+
+            self.logger.info("Supertrend calculation completed successfully")
+            return df
                 
-                # Determine trend
-                df['trend'].iat[i] = 1 if df['close'].iat[i] > df['supertrend'].iat[i] else -1
-            
         except Exception as e:
-            self.logger.error(f"Error calculating Supertrend: {str(e)}")
-            raise
+            self.logger.error(f"Supertrend calculation failed: {str(e)}")
+            return None
 
-        # Calculate buffer zones
-        try:
-            df['upper_buffer'] = df['supertrend'] + self.config.parameters['buffer_distance']
-            df['lower_buffer'] = df['supertrend'] - self.config.parameters['buffer_distance']
-        except Exception as e:
-            self.logger.error(f"Error calculating buffer zones: {str(e)}")
-            raise
 
-        # Validate output
-        required_outputs = ['supertrend', 'trend', 'upper_buffer', 'lower_buffer']
-        if not all(col in df.columns for col in required_outputs):
-            self.logger.error(f"Missing required output columns: {required_outputs}")
-            raise ValueError(f"Missing required output columns: {required_outputs}")
 
-        # Check for NaN values
-        nan_cols = df[required_outputs].isna().sum()
-        if nan_cols.any():
-            self.logger.warning(f"NaN values found in columns: {nan_cols[nan_cols > 0]}")
-            # Forward fill NaN values
-            df[required_outputs] = df[required_outputs].fillna(method='ffill')
-            # Backward fill any remaining NaNs
-            df[required_outputs] = df[required_outputs].fillna(method='bfill')
-
-        self.logger.info("Supertrend calculation completed successfully")
-        return df
-            
-    except Exception as e:
-        self.logger.error(f"Supertrend calculation failed: {str(e)}")
-        return None
-
-			
-			
 class SupertrendStrategy:
     """Core Supertrend strategy implementation"""
     def __init__(self, config):
@@ -893,253 +882,10 @@ class BacktestEngine:
             
         return np.sqrt(252) * (excess_returns.mean() / downside_returns.std())
 
-def bayesian_optimization(self, data, n_trials):
-    """Bayesian optimization implementation"""
-    def objective(atr_period, factor, buffer_distance, 
-                 hard_stop_distance, long_target_rr, short_target_rr):
-        try:
-            # Round parameters to nearest step
-            params = {
-                'atr_period': round(atr_period / 5) * 5,
-                'factor': round(factor * 10) / 10,
-                'buffer_distance': round(buffer_distance),
-                'hard_stop_distance': round(hard_stop_distance),
-                'long_target_rr': round(long_target_rr * 10) / 10,
-                'short_target_rr': round(short_target_rr * 10) / 10
-            }
-            
-            # Update config and run backtest
-            test_config = copy.deepcopy(self.config)
-            test_config.update_parameters(params)
-            
-            backtest_engine = BacktestEngine(
-                test_config,
-                self.dir_manager
-            )
-            
-            results = backtest_engine.run_backtest(data)
-            if results is None or results['metrics'] is None:
-                return float('-inf')
-                
-            return self.calculate_objective_score(results['metrics'])
-            
-        except Exception as e:
-            self.logger.error(f"Bayesian optimization iteration failed: {str(e)}")
-            return float('-inf')
-
-    try:
-        optimizer = BayesianOptimization(
-            f=objective,
-            pbounds={
-                'atr_period': (
-                    self.param_spaces['atr_period']['min'],
-                    self.param_spaces['atr_period']['max']
-                ),
-                'factor': (
-                    self.param_spaces['factor']['min'],
-                    self.param_spaces['factor']['max']
-                ),
-                'buffer_distance': (
-                    self.param_spaces['buffer_distance']['min'],
-                    self.param_spaces['buffer_distance']['max']
-                ),
-                'hard_stop_distance': (
-                    self.param_spaces['hard_stop_distance']['min'],
-                    self.param_spaces['hard_stop_distance']['max']
-                ),
-                'long_target_rr': (
-                    self.param_spaces['long_target_rr']['min'],
-                    self.param_spaces['long_target_rr']['max']
-                ),
-                'short_target_rr': (
-                    self.param_spaces['short_target_rr']['min'],
-                    self.param_spaces['short_target_rr']['max']
-                )
-            },
-            random_state=42
-        )
-
-        # Set up utility function (acquisition function)
-        from bayes_opt import UtilityFunction
-        utility = UtilityFunction(kind="ei", kappa=2.5, xi=0.0)
-        
-        # Initialize with random points
-        init_points = n_trials // 4
-        n_iter = n_trials - init_points
-        
-        self.logger.info(f"Starting Bayesian optimization with {init_points} initial points and {n_iter} iterations")
-        
-        # Perform optimization
-        optimizer.maximize(
-            init_points=init_points,
-            n_iter=n_iter,
-            acquisition_function=utility
-        )
-        
-        self.logger.info("Bayesian optimization completed successfully")
-        
-        return {
-            'best_params': optimizer.max['params'],
-            'best_score': optimizer.max['target'],
-            'all_results': optimizer.space.params
-        }
-        
-    except Exception as e:
-        self.logger.error(f"Bayesian optimization setup failed: {str(e)}")
-        raise
-
-
-
-    def optuna_optimization(self, data, n_trials):
-        """Optuna optimization implementation"""
-        def objective(trial):
-            try:
-                params = {
-                    'atr_period': trial.suggest_int(
-                        'atr_period',
-                        self.param_spaces['atr_period']['min'],
-                        self.param_spaces['atr_period']['max'],
-                        step=self.param_spaces['atr_period']['step']
-                    ),
-                    'factor': trial.suggest_float(
-                        'factor',
-                        self.param_spaces['factor']['min'],
-                        self.param_spaces['factor']['max'],
-                        step=self.param_spaces['factor']['step']
-                    ),
-                    'buffer_distance': trial.suggest_int(
-                        'buffer_distance',
-                        self.param_spaces['buffer_distance']['min'],
-                        self.param_spaces['buffer_distance']['max']
-                    ),
-                    'hard_stop_distance': trial.suggest_int(
-                        'hard_stop_distance',
-                        self.param_spaces['hard_stop_distance']['min'],
-                        self.param_spaces['hard_stop_distance']['max']
-                    ),
-                    'long_target_rr': trial.suggest_float(
-                        'long_target_rr',
-                        self.param_spaces['long_target_rr']['min'],
-                        self.param_spaces['long_target_rr']['max'],
-                        step=self.param_spaces['long_target_rr']['step']
-                    ),
-                    'short_target_rr': trial.suggest_float(
-                        'short_target_rr',
-                        self.param_spaces['short_target_rr']['min'],
-                        self.param_spaces['short_target_rr']['max'],
-                        step=self.param_spaces['short_target_rr']['step']
-                    )
-                }
-                
-                test_config = copy.deepcopy(self.config)
-                test_config.update_parameters(params)
-                
-                backtest_engine = BacktestEngine(
-                    test_config,
-                    self.dir_manager
-                )
-                
-                results = backtest_engine.run_backtest(data)
-                return self.calculate_objective_score(results['metrics'])
-                
-            except Exception as e:
-                self.logger.error(f"Optuna optimization iteration failed: {str(e)}")
-                return float('-inf')
-
-        study = optuna.create_study(direction='maximize')
-        study.optimize(objective, n_trials=n_trials)
-        
-        return {
-            'best_params': study.best_params,
-            'best_score': study.best_value,
-            'all_results': study.trials_dataframe().to_dict('records')
-        }
-
-    def ensemble_optimization(self, results):
-        """Combine results from different optimization methods"""
-        all_params = []
-        scores = []
-        
-        for method, result in results.items():
-            if method != 'ensemble':
-                all_params.append(result['best_params'])
-                scores.append(result['best_score'])
-        
-        # Calculate weighted average of parameters
-        weights = np.array(scores) / sum(scores)
-        ensemble_params = {}
-        
-        for param in self.param_spaces.keys():
-            value = np.average(
-                [p[param] for p in all_params],
-                weights=weights
-            )
-            
-            # Round to nearest step
-            step = self.param_spaces[param]['step']
-            value = round(value / step) * step
-            
-            # Clamp to range
-            value = max(
-                self.param_spaces[param]['min'],
-                min(self.param_spaces[param]['max'], value)
-            )
-            
-            ensemble_params[param] = value
-        
-        # Test ensemble parameters
-        test_config = copy.deepcopy(self.config)
-        test_config.update_parameters(ensemble_params)
-        
-        backtest_engine = BacktestEngine(
-            test_config,
-            self.dir_manager
-        )
-        
-        results = backtest_engine.run_backtest(data)
-        ensemble_score = self.calculate_objective_score(results['metrics'])
-        
-        return {
-            'best_params': ensemble_params,
-            'best_score': ensemble_score
-        }
-
-    def calculate_objective_score(self, metrics):
-        """Calculate comprehensive objective score"""
-        weights = {
-            'total_return': 0.3,
-            'sharpe_ratio': 0.2,
-            'max_drawdown': 0.15,
-            'win_rate': 0.15,
-            'profit_factor': 0.1,
-            'average_trade': 0.1
-        }
-        
-        score = (
-            weights['total_return'] * metrics['total_return'] +
-            weights['sharpe_ratio'] * metrics['sharpe_ratio'] * 10 -
-            weights['max_drawdown'] * metrics['max_drawdown'] * 2 +
-            weights['win_rate'] * metrics['win_rate'] * 100 +
-            weights['profit_factor'] * metrics['profit_factor'] * 10 +
-            weights['average_trade'] * metrics['average_trade'] * 100
-        )
-        
-        return score
-
-    def save_optimization_results(self, results):
-        """Save optimization results with visualizations"""
-        # Save JSON results
-        results_file = os.path.join(
-            self.dir_manager.dirs['optimization'],
-            f'optimization_results_{self.timestamp}.json'
-        )
-        with open(results_file, 'w') as f:
-            json.dump(results, f, indent=4)
-
 
 class ParameterOptimizer:
     def __init__(self, config, directory_manager):
-        self.timestamp = "2025-05-08 02:42:16"
+        self.timestamp = "2025-05-08 03:09:32"  # Update timestamp
         self.user = "arullr001"
         self.config = config
         self.dir_manager = directory_manager
@@ -1214,41 +960,41 @@ class ParameterOptimizer:
             self.logger.error(f"Optimization failed: {str(e)}")
             return None
 
-    def run_bayesian_optimization(self, data, n_trials):  # Changed method name from bayesian_optimization
+    def run_bayesian_optimization(self, data, n_trials):  # Add this method here
         """Bayesian optimization implementation"""
-        def objective(atr_period, factor, buffer_distance, 
-                     hard_stop_distance, long_target_rr, short_target_rr):
-            try:
-                # Round parameters to nearest step
-                params = {
-                    'atr_period': round(atr_period / 5) * 5,
-                    'factor': round(factor * 10) / 10,
-                    'buffer_distance': round(buffer_distance),
-                    'hard_stop_distance': round(hard_stop_distance),
-                    'long_target_rr': round(long_target_rr * 10) / 10,
-                    'short_target_rr': round(short_target_rr * 10) / 10
-                }
-                
-                # Update config and run backtest
-                test_config = copy.deepcopy(self.config)
-                test_config.update_parameters(params)
-                
-                backtest_engine = BacktestEngine(
-                    test_config,
-                    self.dir_manager
-                )
-                
-                results = backtest_engine.run_backtest(data)
-                if results is None or results['metrics'] is None:
-                    return float('-inf')
-                    
-                return self.calculate_objective_score(results['metrics'])
-                
-            except Exception as e:
-                self.logger.error(f"Bayesian optimization iteration failed: {str(e)}")
-                return float('-inf')
-
         try:
+            def objective(atr_period, factor, buffer_distance, 
+                         hard_stop_distance, long_target_rr, short_target_rr):
+                try:
+                    # Round parameters to nearest step
+                    params = {
+                        'atr_period': round(atr_period / 5) * 5,
+                        'factor': round(factor * 10) / 10,
+                        'buffer_distance': round(buffer_distance),
+                        'hard_stop_distance': round(hard_stop_distance),
+                        'long_target_rr': round(long_target_rr * 10) / 10,
+                        'short_target_rr': round(short_target_rr * 10) / 10
+                    }
+                    
+                    # Update config and run backtest
+                    test_config = copy.deepcopy(self.config)
+                    test_config.update_parameters(params)
+                    
+                    backtest_engine = BacktestEngine(
+                        test_config,
+                        self.dir_manager
+                    )
+                    
+                    results = backtest_engine.run_backtest(data)
+                    if results is None or results['metrics'] is None:
+                        return float('-inf')
+                        
+                    return self.calculate_objective_score(results['metrics'])
+                    
+                except Exception as e:
+                    self.logger.error(f"Bayesian optimization iteration failed: {str(e)}")
+                    return float('-inf')
+
             optimizer = BayesianOptimization(
                 f=objective,
                 pbounds={
@@ -1290,26 +1036,53 @@ class ParameterOptimizer:
             
             self.logger.info(f"Starting Bayesian optimization with {init_points} initial points and {n_iter} iterations")
             
-            # Perform optimization
-            optimizer.maximize(
-                init_points=init_points,
-                n_iter=n_iter,
-                acquisition_function=utility
-            )
+            # Initialize results array to store valid scores
+            valid_results = []
+            
+            # Use tqdm for progress tracking
+            from tqdm import tqdm
+            with tqdm(total=n_iter, desc="Bayesian Optimization Progress") as pbar:
+                for i in range(n_iter):
+                    try:
+                        result = optimizer.maximize(
+                            init_points=0 if i > 0 else init_points,
+                            n_iter=1,
+                            acquisition_function=utility
+                        )
+                        
+                        # Only store finite values
+                        if np.isfinite(result.max['target']):
+                            valid_results.append(result)
+                        
+                        pbar.update(1)
+                        
+                        # Log progress every 100 iterations
+                        if (i + 1) % 100 == 0:
+                            self.logger.info(f"Iteration {i + 1}: Best score = {optimizer.max['target']:.4f}")
+                        
+                    except Exception as e:
+                        self.logger.warning(f"Iteration {i} failed: {str(e)}")
+                        continue
+            
+            if not valid_results:
+                raise ValueError("No valid results found during optimization")
+                
+            # Find best result among valid results
+            best_result = max(valid_results, key=lambda x: x.max['target'])
             
             self.logger.info("Bayesian optimization completed successfully")
             
             return {
-                'best_params': optimizer.max['params'],
-                'best_score': optimizer.max['target'],
+                'best_params': best_result.max['params'],
+                'best_score': best_result.max['target'],
                 'all_results': optimizer.space.params
             }
             
         except Exception as e:
-            self.logger.error(f"Bayesian optimization setup failed: {str(e)}")
-            raise
+            self.logger.error(f"Bayesian optimization failed: {str(e)}")
+            return None
 
-
+    
 
 def main():
     """Main execution flow"""
