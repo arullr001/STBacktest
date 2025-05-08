@@ -178,7 +178,6 @@ class SupertrendConfig:
         return config
 		
 		
-		
 class DirectoryManager:
     """Directory management and logging setup"""
     def __init__(self, base_dir="Supertrend_Strategy"):
@@ -244,6 +243,8 @@ class DirectoryManager:
             self.logger.error(f"Failed to create directories: {str(e)}")
             raise
 
+
+
 class DataHandler:
     """Data loading and preprocessing"""
     def __init__(self, directory_manager):
@@ -253,13 +254,30 @@ class DataHandler:
     def load_data(self, filepath):
         """Load and validate data"""
         try:
-            # Load data
-            df = pd.read_csv(filepath)
+            # Validate file path
+            if not os.path.exists(filepath):
+                self.logger.error(f"File not found: {filepath}")
+                raise FileNotFoundError(f"File not found: {filepath}")
+
+            # Check file extension
+            _, ext = os.path.splitext(filepath)
+            if ext.lower() not in ['.csv', '.xlsx', '.xls']:
+                self.logger.error(f"Unsupported file format: {ext}")
+                raise ValueError(f"Unsupported file format. Please use .csv, .xlsx, or .xls files")
+
+            # Load data based on file type
+            if ext.lower() == '.csv':
+                df = pd.read_csv(filepath)
+            else:
+                df = pd.read_excel(filepath)
             
             # Ensure required columns exist
             required_columns = ['open', 'high', 'low', 'close']
-            if not all(col in df.columns for col in required_columns):
-                raise ValueError(f"Missing required columns. Required: {required_columns}")
+            missing_columns = [col for col in required_columns if col not in df.columns]
+            
+            if missing_columns:
+                self.logger.error(f"Missing required columns: {missing_columns}")
+                raise ValueError(f"Missing required columns: {missing_columns}")
             
             # Convert timestamp if exists
             if 'timestamp' in df.columns:
@@ -275,28 +293,13 @@ class DataHandler:
             # Forward fill missing values
             df.fillna(method='ffill', inplace=True)
             
+            self.logger.info(f"Successfully loaded data with {len(df)} rows")
             return df
             
         except Exception as e:
             self.logger.error(f"Data loading failed: {str(e)}")
             return None
 
-    def prepare_data(self, df):
-        """Prepare data for analysis"""
-        try:
-            # Calculate basic metrics
-            df['hl2'] = (df['high'] + df['low']) / 2
-            df['returns'] = df['close'].pct_change()
-            df['log_returns'] = np.log(df['close'] / df['close'].shift(1))
-            
-            # Calculate daily volatility
-            df['volatility'] = df['returns'].rolling(window=20).std()
-            
-            return df
-            
-        except Exception as e:
-            self.logger.error(f"Data preparation failed: {str(e)}")
-            return None
 
 class SupertrendCalculator:
     """Core Supertrend calculations"""
@@ -1071,8 +1074,8 @@ class ParameterOptimizer:
         )
         with open(results_file, 'w') as f:
             json.dump(results, f, indent=4)
-			
-			
+
+
 def main():
     """Main execution flow"""
     try:
@@ -1087,114 +1090,43 @@ def main():
         # Load data
         data_handler = DataHandler(dir_manager)
         
-        print("Data Loading:")
+        print("\nData Loading:")
         print("-" * 50)
-        data_path = input("Enter the path to your OHLC data file: ").strip()
+        print("Please provide the full path to your OHLC data file")
+        print("Supported formats: .csv, .xlsx, .xls")
+        print("Example: C:/Users/username/data/BTCUSDT_1h.csv")
+        print("\nRequired columns: open, high, low, close")
+        print("Optional column: timestamp")
         
-        df = data_handler.load_data(data_path)
-        if df is None:
-            raise ValueError("Failed to load data")
-        
-        print(f"\nLoaded {len(df)} bars of data")
-        print(f"Date range: {df.index[0]} to {df.index[-1]}")
-        
-        # Configuration
-        print("\nConfiguration:")
-        print("-" * 50)
-        print("Default parameter ranges:")
-        for param, space in config.param_ranges.items():
-            print(f"{param}: {space['min']} to {space['max']} (step: {space['step']})")
-        
-        customize = input("\nWould you like to customize parameter ranges? (y/n): ").strip().lower()
-        
-        if customize == 'y':
-            for param in config.param_ranges.keys():
-                print(f"\nCurrent {param} range: {config.param_ranges[param]}")
-                min_val = float(input(f"Enter minimum {param}: "))
-                max_val = float(input(f"Enter maximum {param}: "))
-                step = float(input(f"Enter step size for {param}: "))
-                
-                config.param_ranges[param].update({
-                    'min': min_val,
-                    'max': max_val,
-                    'step': step
-                })
-        
-        # Optimization setup
-        print("\nOptimization Setup:")
-        print("-" * 50)
-        n_trials = int(input("Enter number of optimization trials (default 100): ") or "100")
-        
-        methods = ['ensemble', 'bayesian', 'optuna']
-        print("\nAvailable optimization methods:")
-        for i, method in enumerate(methods, 1):
-            print(f"{i}. {method}")
-        
-        method_choice = int(input("\nSelect optimization method (1-3): "))
-        optimization_method = methods[method_choice - 1]
-        
-        # Initialize optimizer and run optimization
-        print("\nRunning Optimization:")
-        print("-" * 50)
-        optimizer = ParameterOptimizer(config, dir_manager)
-        
-        print(f"Starting {optimization_method} optimization with {n_trials} trials...")
-        optimization_results = optimizer.optimize(
-            data,
-            method=optimization_method,
-            n_trials=n_trials
-        )
-        
-        if optimization_results is None:
-            raise ValueError("Optimization failed")
-        
-        # Display results
-        print("\nOptimization Results:")
-        print("-" * 50)
-        best_params = optimization_results['results']['ensemble']['best_params'] \
-            if optimization_method == 'ensemble' \
-            else optimization_results['results'][optimization_method]['best_params']
-        
-        print("\nBest Parameters Found:")
-        for param, value in best_params.items():
-            print(f"{param}: {value}")
-        
-        # Run final backtest with optimized parameters
-        print("\nRunning Final Backtest:")
-        print("-" * 50)
-        
-        config.update_parameters(best_params)
-        backtest_engine = BacktestEngine(config, dir_manager)
-        final_results = backtest_engine.run_backtest(df)
-        
-        if final_results is None:
-            raise ValueError("Final backtest failed")
-        
-        # Display final results
-        print("\nFinal Performance Metrics:")
-        print("-" * 50)
-        metrics = final_results['metrics']
-        print(f"Total Return: {metrics['total_return']:.2f}%")
-        print(f"Sharpe Ratio: {metrics['sharpe_ratio']:.2f}")
-        print(f"Max Drawdown: {metrics['max_drawdown']:.2f}%")
-        print(f"Win Rate: {metrics['win_rate']*100:.2f}%")
-        print(f"Profit Factor: {metrics['profit_factor']:.2f}")
-        print(f"Total Trades: {metrics['total_trades']}")
-        
-        # Save results
-        save_path = os.path.join(dir_manager.base_dir, 'final_results')
-        print(f"\nResults saved in: {save_path}")
-        
-        return True
-        
-    except Exception as e:
-        print(f"\nError: {str(e)}")
-        traceback.print_exc()
-        return False
+        while True:
+            data_path = input("\nEnter the path to your OHLC data file: ").strip()
+            
+            # Remove quotes if present
+            data_path = data_path.strip('"\'')
+            
+            # Check if user wants to exit
+            if data_path.lower() in ['exit', 'quit', 'q']:
+                print("\nExiting program...")
+                return False
+            
+            # Try to load the data
+            df = data_handler.load_data(data_path)
+            if df is not None:
+                break
+            
+            print("\nWould you like to:")
+            print("1. Try again")
+            print("2. Exit")
+            choice = input("Enter your choice (1 or 2): ").strip()
+            
+            if choice != '1':
+                print("\nExiting program...")
+                return False
+
 
 if __name__ == "__main__":
     # Set the timestamp and user globally
-    CURRENT_UTC = "2025-05-08 01:26:49"
+    CURRENT_UTC = "2025-05-08 01:44:11"
     CURRENT_USER = "arullr001"
     
     try:
@@ -1210,4 +1142,3 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\nAn unexpected error occurred: {str(e)}")
         traceback.print_exc()
-		
