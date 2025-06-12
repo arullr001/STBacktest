@@ -1202,6 +1202,65 @@ def create_performance_visualizations(self, df):
 
 
 
+def save_empty_results_file(file_path, results_dir, params, current_utc, current_user, total_combinations, reason="No Results"):
+    """
+    Creates empty results files with explanation when no results are generated
+    Args:
+        file_path (str): Path of the processed file
+        results_dir (str): Directory to save the empty results
+        params (dict or tuple): Parameter ranges or combination
+        current_utc (str): Current UTC timestamp
+        current_user (str): Current user's login
+        total_combinations (int): Total number of combinations tested
+        reason (str): Reason for no results (default "No Results")
+    """
+    # Handle both dictionary and tuple parameter inputs
+    if isinstance(params, tuple):
+        param_dict = {
+            'atr_lengths': [params[0]],
+            'factors': [params[1]],
+            'buffers': [params[2]],
+            'stops': [params[3]]
+        }
+    else:
+        param_dict = params
+
+    # Create the explanation message
+    no_results_message = (
+        f"{reason}\n"
+        f"{'=' * len(reason)}\n"
+        f"Processing Date: {current_utc}\n"
+        f"User: {current_user}\n"
+        f"File Processed: {os.path.basename(file_path)}\n"
+        "\nParameter Ranges Tested:\n"
+        f"- ATR Length: {min(param_dict['atr_lengths'])} to {max(param_dict['atr_lengths'])}\n"
+        f"- Factor: {min(param_dict['factors'])} to {max(param_dict['factors'])}\n"
+        f"- Buffer: {min(param_dict['buffers'])} to {max(param_dict['buffers'])}\n"
+        f"- Hard Stop: {min(param_dict['stops'])} to {max(param_dict['stops'])}\n"
+        f"\nTotal Combinations Tested: {total_combinations}\n"
+        "\nReason: " + reason +
+        "\nSuggestion: " +
+        ("Try adjusting parameter ranges or reviewing data quality." if reason == "No parameter combinations generated profitable trades."
+         else "Consider reviewing data quality or expanding parameter ranges.")
+    )
+
+    # Save as TXT
+    no_results_txt = os.path.join(results_dir, 'no_results.txt')
+    with open(no_results_txt, 'w') as f:
+        f.write(no_results_message)
+
+    # Save as CSV (empty with header)
+    no_results_csv = os.path.join(results_dir, 'all_results.csv')
+    empty_df = pd.DataFrame(columns=[
+        'atr_length', 'factor', 'buffer_multiplier', 'hard_stop_distance',
+        'total_profit', 'trade_count', 'win_rate', 'profit_factor',
+        'risk_adjusted_return', 'max_consecutive_wins', 'max_consecutive_losses'
+    ])
+    empty_df.to_csv(no_results_csv, index=False)
+
+    print(f"\n{reason}")
+    print(f"Empty results files created in: {results_dir}")
+    print("Check 'no_results.txt' for details.")
 
 def main():
     """
@@ -1437,5 +1496,3 @@ if __name__ == "__main__":
         print(f"An error occurred: {str(e)}")
         logging.getLogger('system_errors').error(f"Fatal error: {str(e)}\n{traceback.format_exc()}")
         sys.exit(1)
-
-    
