@@ -408,86 +408,112 @@ CURRENT_USER = "arullr001"
 
 
 def calculate_supertrend_cpu(df, atr_length, factor, buffer_multiplier):
-    """CPU version of SuperTrend calculation"""
-    df = df.copy()
+    """CPU implementation of SuperTrend calculation matching Pinescript"""
+    print("\nDebug - Starting CPU SuperTrend calculation")
+    print(f"Parameters: ATR={atr_length}, Factor={factor}, Buffer={buffer_multiplier}")
     
-    # Calculate ATR
-    high = df['high'].values
-    low = df['low'].values
-    close = df['close'].values
-    
-    tr = np.zeros(len(df))
-    atr = np.zeros(len(df))
-    
-    # Calculate TR and ATR
-    for i in range(len(df)):
-        if i == 0:
-            tr[i] = high[i] - low[i]
-            atr[i] = tr[i]
-        else:
-            tr[i] = max(high[i] - low[i],
-                       abs(high[i] - close[i-1]),
-                       abs(low[i] - close[i-1]))
-            atr[i] = (atr[i-1] * (atr_length - 1) + tr[i]) / atr_length
-    
-    # Calculate basic bands
-    hl2 = (high + low) / 2
-    up = hl2 - (factor * atr)
-    dn = hl2 + (factor * atr)
-    
-    # Initialize trend arrays
-    trend = np.zeros(len(df))
-    trend_up = np.zeros(len(df))
-    trend_down = np.zeros(len(df))
-    
-    # Calculate SuperTrend
-    for i in range(1, len(df)):
-        if close[i-1] > trend_up[i-1]:
-            trend_up[i] = max(up[i], trend_up[i-1])
-        else:
-            trend_up[i] = up[i]
+    try:
+        df = df.copy()
+        
+        # Calculate ATR and dynamic buffer
+        high = df['high'].values
+        low = df['low'].values
+        close = df['close'].values
+        
+        tr = np.zeros(len(df))
+        atr = np.zeros(len(df))
+        
+        # Calculate TR and ATR exactly as in Pinescript
+        for i in range(len(df)):
+            if i == 0:
+                tr[i] = high[i] - low[i]
+                atr[i] = tr[i]
+            else:
+                tr[i] = max(high[i] - low[i],
+                           abs(high[i] - close[i-1]),
+                           abs(low[i] - close[i-1]))
+                atr[i] = (atr[i-1] * (atr_length - 1) + tr[i]) / atr_length
+        
+        # Calculate dynamic buffer as in Pinescript
+        dynamic_buffer = atr * buffer_multiplier
+        
+        # Calculate basic bands
+        hl2 = (high + low) / 2
+        basic_upperband = hl2 + (factor * atr)
+        basic_lowerband = hl2 - (factor * atr)
+        
+        # Initialize arrays
+        final_upperband = np.zeros(len(df))
+        final_lowerband = np.zeros(len(df))
+        supertrend = np.zeros(len(df))
+        direction = np.zeros(len(df))
+        
+        # Calculate Supertrend
+        for i in range(1, len(df)):
+            # Calculate upper band
+            if basic_upperband[i] < final_upperband[i-1] or close[i-1] > final_upperband[i-1]:
+                final_upperband[i] = basic_upperband[i]
+            else:
+                final_upperband[i] = final_upperband[i-1]
+                
+            # Calculate lower band
+            if basic_lowerband[i] > final_lowerband[i-1] or close[i-1] < final_lowerband[i-1]:
+                final_lowerband[i] = basic_lowerband[i]
+            else:
+                final_lowerband[i] = final_lowerband[i-1]
             
-        if close[i-1] < trend_down[i-1]:
-            trend_down[i] = min(dn[i], trend_down[i-1])
-        else:
-            trend_down[i] = dn[i]
-            
-        if close[i] > trend_down[i-1]:
-            trend[i] = 1  # Uptrend
-        elif close[i] < trend_up[i-1]:
-            trend[i] = -1  # Downtrend
-        else:
-            trend[i] = trend[i-1]  # Maintain previous trend
-    
-    # Add results to DataFrame
-    df['up'] = trend_up
-    df['dn'] = trend_down
-    df['trend'] = trend
-    
-    # Calculate buffer zones
-    df['trailing_up'] = df['up'] + (df['up'] * buffer_multiplier)
-    df['trailing_dn'] = df['dn'] - (df['dn'] * buffer_multiplier)
-    
-    # Generate signals based on the strategy rules
-    df['buy_signal'] = (df['trend'] == 1) & (df['close'] > df['trailing_up'])
-    df['sell_signal'] = (df['trend'] == -1) | (df['close'] < df['up'])
-    df['short_signal'] = (df['trend'] == -1) & (df['close'] < df['trailing_dn'])
-    df['cover_signal'] = (df['trend'] == 1) | (df['close'] > df['dn'])
-    
-    return df
+            # Determine trend direction
+            if close[i] > final_upperband[i-1]:
+                direction[i] = -1  # Uptrend (matching Pinescript's direction)
+                supertrend[i] = final_lowerband[i]
+            elif close[i] < final_lowerband[i-1]:
+                direction[i] = 1   # Downtrend (matching Pinescript's direction)
+                supertrend[i] = final_upperband[i]
+            else:
+                direction[i] = direction[i-1]
+                supertrend[i] = supertrend[i-1]
+        
+        # Add results to DataFrame
+        df['supertrend'] = supertrend
+        df['direction'] = direction
+        
+        # Calculate buffer zones exactly as in Pinescript
+        df['up_trend_buffer'] = np.where(direction < 0, 
+                                        supertrend + dynamic_buffer,
+                                        np.nan)
+        df['down_trend_buffer'] = np.where(direction > 0,
+                                          supertrend - dynamic_buffer,
+                                          np.nan)
+        
+        # Generate signals using Pinescript logic
+        df['buy_signal'] = (df['direction'] < 0) & \
+                          (df['close'] <= df['up_trend_buffer']) & \
+                          (df['close'] >= df['supertrend'])
+        
+        df['sell_signal'] = (df['direction'] > 0) & \
+                           (df['close'] >= df['down_trend_buffer']) & \
+                           (df['close'] <= df['supertrend'])
+        
+        print("\nDebug - Signal Statistics:")
+        print(f"Buy Signals: {df['buy_signal'].sum()} ({(df['buy_signal'].sum()/len(df))*100:.2f}%)")
+        print(f"Sell Signals: {df['sell_signal'].sum()} ({(df['sell_signal'].sum()/len(df))*100:.2f}%)")
+        
+        return df
+        
+    except Exception as e:
+        print(f"Error in CPU calculation: {str(e)}")
+        raise
+
 
 @cuda.jit
 def calculate_supertrend_cuda_kernel(high, low, close, atr_length, factor, buffer_multiplier,
-                                   up, dn, trend, trailing_up, trailing_dn):
-    """CUDA kernel for SuperTrend calculation"""
+                                   supertrend, direction, up_trend_buffer, down_trend_buffer):
+    """CUDA kernel for SuperTrend calculation matching Pinescript"""
     i = cuda.grid(1)
     if i >= len(close):
         return
 
-    # Initialize thread-local variables
-    hl2 = (high[i] + low[i]) / 2
-
-    # Calculate TR and ATR
+    # Calculate ATR
     if i == 0:
         tr = high[0] - low[0]
         atr = tr
@@ -497,96 +523,77 @@ def calculate_supertrend_cuda_kernel(high, low, close, atr_length, factor, buffe
                 abs(low[i] - close[i-1]))
         atr = (atr * (atr_length - 1) + tr) / atr_length
 
+    # Calculate dynamic buffer
+    dynamic_buffer = atr * buffer_multiplier
+    
     # Calculate basic bands
-    up_basic = hl2 - (factor * atr)
-    dn_basic = hl2 + (factor * atr)
+    hl2 = (high[i] + low[i]) / 2
+    basic_upperband = hl2 + (factor * atr)
+    basic_lowerband = hl2 - (factor * atr)
 
     if i == 0:
-        up[i] = up_basic
-        dn[i] = dn_basic
-        trend[i] = 0
+        supertrend[i] = hl2
+        direction[i] = 0
     else:
-        # Calculate up trend
-        if close[i-1] > up[i-1]:
-            up[i] = max(up_basic, up[i-1])
+        # Determine trend direction and supertrend value
+        if close[i] > supertrend[i-1]:
+            direction[i] = -1  # Uptrend
+            supertrend[i] = basic_lowerband
+        elif close[i] < supertrend[i-1]:
+            direction[i] = 1   # Downtrend
+            supertrend[i] = basic_upperband
         else:
-            up[i] = up_basic
-
-        # Calculate down trend
-        if close[i-1] < dn[i-1]:
-            dn[i] = min(dn_basic, dn[i-1])
-        else:
-            dn[i] = dn_basic
-
-        # Determine trend
-        if close[i] > dn[i-1]:
-            trend[i] = 1  # Uptrend
-        elif close[i] < up[i-1]:
-            trend[i] = -1  # Downtrend
-        else:
-            trend[i] = trend[i-1]
+            direction[i] = direction[i-1]
+            supertrend[i] = supertrend[i-1]
 
     # Calculate buffer zones
-    trailing_up[i] = up[i] + (up[i] * buffer_multiplier)
-    trailing_dn[i] = dn[i] - (dn[i] * buffer_multiplier)
+    if direction[i] < 0:
+        up_trend_buffer[i] = supertrend[i] + dynamic_buffer
+        down_trend_buffer[i] = 0.0  # nan equivalent
+    elif direction[i] > 0:
+        up_trend_buffer[i] = 0.0    # nan equivalent
+        down_trend_buffer[i] = supertrend[i] - dynamic_buffer
+
 
 def calculate_supertrend_gpu(df, atr_length, factor, buffer_multiplier):
-    """GPU-accelerated SuperTrend calculation"""
+    """GPU-accelerated SuperTrend calculation matching Pinescript"""
     df = df.copy()
+    n = len(df)
 
-    # Extract arrays for GPU
-    high = df['high'].values
-    low = df['low'].values
-    close = df['close'].values
-    n = len(close)
+    # Prepare input arrays
+    high = cuda.to_device(df['high'].values.astype(np.float64))
+    low = cuda.to_device(df['low'].values.astype(np.float64))
+    close = cuda.to_device(df['close'].values.astype(np.float64))
 
-    # Convert to contiguous arrays for CUDA
-    high_gpu = cuda.to_device(high.astype(np.float64))
-    low_gpu = cuda.to_device(low.astype(np.float64))
-    close_gpu = cuda.to_device(close.astype(np.float64))
+    # Create output arrays
+    supertrend = cuda.device_array(n, dtype=np.float64)
+    direction = cuda.device_array(n, dtype=np.float64)
+    up_trend_buffer = cuda.device_array(n, dtype=np.float64)
+    down_trend_buffer = cuda.device_array(n, dtype=np.float64)
 
-    # Create output arrays on GPU
-    up_gpu = cuda.device_array(n, dtype=np.float64)
-    dn_gpu = cuda.device_array(n, dtype=np.float64)
-    trend_gpu = cuda.device_array(n, dtype=np.float64)
-    trailing_up_gpu = cuda.device_array(n, dtype=np.float64)
-    trailing_dn_gpu = cuda.device_array(n, dtype=np.float64)
+    # Configure and launch kernel
+    threads_per_block = THREADS_PER_BLOCK
+    blocks_per_grid = (n + threads_per_block - 1) // threads_per_block
 
-    # Configure CUDA kernel
-    blocks_per_grid = (n + THREADS_PER_BLOCK - 1) // THREADS_PER_BLOCK
-
-    # Launch CUDA kernel
-    calculate_supertrend_cuda_kernel[blocks_per_grid, THREADS_PER_BLOCK](
-        high_gpu, low_gpu, close_gpu, atr_length, factor, buffer_multiplier,
-        up_gpu, dn_gpu, trend_gpu, trailing_up_gpu, trailing_dn_gpu
+    calculate_supertrend_cuda_kernel[blocks_per_grid, threads_per_block](
+        high, low, close, atr_length, factor, buffer_multiplier,
+        supertrend, direction, up_trend_buffer, down_trend_buffer
     )
 
-    # Copy results back from GPU
-    up = up_gpu.copy_to_host()
-    dn = dn_gpu.copy_to_host()
-    trend = trend_gpu.copy_to_host()
-    trailing_up = trailing_up_gpu.copy_to_host()
-    trailing_dn = trailing_dn_gpu.copy_to_host()
+    # Copy results back to host
+    df['supertrend'] = supertrend.copy_to_host()
+    df['direction'] = direction.copy_to_host()
+    df['up_trend_buffer'] = up_trend_buffer.copy_to_host()
+    df['down_trend_buffer'] = down_trend_buffer.copy_to_host()
 
-    # Add results to DataFrame
-    df['up'] = up
-    df['dn'] = dn
-    df['trend'] = trend
-    df['trailing_up'] = trailing_up
-    df['trailing_dn'] = trailing_dn
-
-    # Generate signals
-    df['buy_signal'] = (df['trend'] == 1) & (df['close'] > df['trailing_up'])
-    df['sell_signal'] = (df['trend'] == -1) | (df['close'] < df['up'])
-    df['short_signal'] = (df['trend'] == -1) & (df['close'] < df['trailing_dn'])
-    df['cover_signal'] = (df['trend'] == 1) | (df['close'] > df['dn'])
-
-    # Clean up GPU memory
-    try:
-        del high_gpu, low_gpu, close_gpu, up_gpu, dn_gpu, trend_gpu, trailing_up_gpu, trailing_dn_gpu
-        cuda.current_context().deallocations.clear()
-    except Exception as e:
-        print(f"Warning: Could not clear GPU memory: {e}", end='\r')
+    # Generate signals using Pinescript logic
+    df['buy_signal'] = (df['direction'] < 0) & \
+                      (df['close'] <= df['up_trend_buffer']) & \
+                      (df['close'] >= df['supertrend'])
+    
+    df['sell_signal'] = (df['direction'] > 0) & \
+                       (df['close'] >= df['down_trend_buffer']) & \
+                       (df['close'] <= df['supertrend'])
 
     return df
 
@@ -594,17 +601,6 @@ def calculate_supertrend_gpu(df, atr_length, factor, buffer_multiplier):
 def calculate_supertrend(df, atr_length, factor, buffer_multiplier):
     """
     Wrapper function that chooses between CPU or GPU implementation with enhanced debugging
-    
-    Parameters:
-    -----------
-    df : pandas.DataFrame
-        DataFrame with OHLC data
-    atr_length : int
-        Length of ATR period
-    factor : float
-        SuperTrend factor multiplier
-    buffer_multiplier : float
-        Buffer zone multiplier
     """
     print(f"\nDebug - Starting SuperTrend calculation:")
     print(f"Parameters: ATR={atr_length}, Factor={factor}, Buffer={buffer_multiplier}")
@@ -625,7 +621,6 @@ def calculate_supertrend(df, atr_length, factor, buffer_multiplier):
                     print("Insufficient GPU memory, using CPU")
                     return calculate_supertrend_cpu(df, atr_length, factor, buffer_multiplier)
                 
-                
                 if free_mem > data_size * 3:
                     print("Using GPU acceleration")
                     result_df = calculate_supertrend_gpu(df, atr_length, factor, buffer_multiplier)
@@ -640,33 +635,28 @@ def calculate_supertrend(df, atr_length, factor, buffer_multiplier):
             print("No GPU available, using CPU implementation")
             result_df = calculate_supertrend_cpu(df, atr_length, factor, buffer_multiplier)
 
-        # Verify calculations
+        # Verify calculations with new column names
         print("\nDebug - Verification of calculations:")
-        print(f"SuperTrend lines generated: {all(col in result_df.columns for col in ['up', 'dn'])}")
-        print(f"Trend values present: {result_df['trend'].nunique()} unique trends")
-        print(f"Buffer zones calculated: {all(col in result_df.columns for col in ['trailing_up', 'trailing_dn'])}")
+        print(f"SuperTrend values generated: {all(col in result_df.columns for col in ['supertrend', 'direction'])}")
+        print(f"Trend values present: {result_df['direction'].nunique()} unique trends")
+        print(f"Buffer zones calculated: {all(col in result_df.columns for col in ['up_trend_buffer', 'down_trend_buffer'])}")
         
         # Signal generation check
         buy_signals = result_df['buy_signal'].sum()
         sell_signals = result_df['sell_signal'].sum()
-        short_signals = result_df['short_signal'].sum()
-        cover_signals = result_df['cover_signal'].sum()
         
         print("\nDebug - Signal Generation:")
         print(f"Buy signals: {buy_signals}")
         print(f"Sell signals: {sell_signals}")
-        print(f"Short signals: {short_signals}")
-        print(f"Cover signals: {cover_signals}")
         
-        if buy_signals == 0 and short_signals == 0:
+        if buy_signals == 0 and sell_signals == 0:
             print("\nWarning: No entry signals generated!")
             print("Parameters may be too restrictive")
         
         # Basic signal validation
         signal_validation = {
-            'has_entries': buy_signals > 0 or short_signals > 0,
-            'has_exits': sell_signals > 0 or cover_signals > 0,
-            'reasonable_signal_ratio': 0.0001 <= (buy_signals + short_signals) / len(df) <= 0.1
+            'has_entries': buy_signals > 0 or sell_signals > 0,
+            'reasonable_signal_ratio': 0.0001 <= (buy_signals + sell_signals) / len(df) <= 0.1
         }
         
         print("\nDebug - Signal Validation:")
@@ -674,9 +664,8 @@ def calculate_supertrend(df, atr_length, factor, buffer_multiplier):
             print(f"{check}: {'Passed' if passed else 'Failed'}")
         
         # Final verification
-        required_columns = ['open', 'high', 'low', 'close', 'up', 'dn', 'trend', 
-                          'trailing_up', 'trailing_dn', 'buy_signal', 'sell_signal', 
-                          'short_signal', 'cover_signal']
+        required_columns = ['open', 'high', 'low', 'close', 'supertrend', 'direction',
+                          'up_trend_buffer', 'down_trend_buffer', 'buy_signal', 'sell_signal']
         
         missing_columns = [col for col in required_columns if col not in result_df.columns]
         if missing_columns:
@@ -689,103 +678,6 @@ def calculate_supertrend(df, atr_length, factor, buffer_multiplier):
     except Exception as e:
         error_msg = f"Error in SuperTrend calculation: {str(e)}\n{traceback.format_exc()}"
         print(f"\nDebug - Error in calculate_supertrend:")
-        print(error_msg)
-        logging.getLogger('processing_errors').error(error_msg)
-        raise
-
-def calculate_supertrend_cpu(df, atr_length, factor, buffer_multiplier):
-    """CPU implementation of SuperTrend calculation with enhanced debugging"""
-    print("\nDebug - Starting CPU SuperTrend calculation")
-    print("\nDebug - Signal Generation Parameters:")
-    print(f"ATR Length: {atr_length}")
-    print(f"Factor: {factor}")
-    print(f"Buffer Multiplier: {buffer_multiplier}")
-    try:
-        df = df.copy()
-        
-        # Calculate True Range and ATR
-        print("Calculating TR and ATR...")
-        high = df['high'].values
-        low = df['low'].values
-        close = df['close'].values
-        
-        tr = np.zeros(len(df))
-        atr = np.zeros(len(df))
-        
-        for i in range(len(df)):
-            if i == 0:
-                tr[i] = high[i] - low[i]
-                atr[i] = tr[i]
-            else:
-                tr[i] = max(high[i] - low[i],
-                           abs(high[i] - close[i-1]),
-                           abs(low[i] - close[i-1]))
-                atr[i] = (atr[i-1] * (atr_length - 1) + tr[i]) / atr_length
-        
-        print("Calculating basic bands...")
-        # Calculate basic bands
-        hl2 = (high + low) / 2
-        up = hl2 - (factor * atr)
-        dn = hl2 + (factor * atr)
-        
-        # Initialize trend arrays
-        trend = np.zeros(len(df))
-        trend_up = np.zeros(len(df))
-        trend_down = np.zeros(len(df))
-        
-        print("Calculating SuperTrend...")
-        # Calculate SuperTrend
-        for i in range(1, len(df)):
-            if close[i-1] > trend_up[i-1]:
-                trend_up[i] = max(up[i], trend_up[i-1])
-            else:
-                trend_up[i] = up[i]
-                
-            if close[i-1] < trend_down[i-1]:
-                trend_down[i] = min(dn[i], trend_down[i-1])
-            else:
-                trend_down[i] = dn[i]
-                
-            if close[i] > trend_down[i-1]:
-                trend[i] = 1  # Uptrend
-            elif close[i] < trend_up[i-1]:
-                trend[i] = -1  # Downtrend
-            else:
-                trend[i] = trend[i-1]  # Maintain previous trend
-        
-        print("Adding results to DataFrame...")
-        # Add results to DataFrame
-        df['up'] = trend_up
-        df['dn'] = trend_down
-        df['trend'] = trend
-        
-        # Calculate buffer zones
-        df['trailing_up'] = df['up'] + (df['up'] * buffer_multiplier)
-        df['trailing_dn'] = df['dn'] - (df['dn'] * buffer_multiplier)
-        
-        print("Generating signals...")
-        # Generate signals
-        df['buy_signal'] = (df['trend'] == 1) & (df['close'] > df['trailing_up'])
-        df['sell_signal'] = (df['trend'] == -1) | (df['close'] < df['up'])
-        df['short_signal'] = (df['trend'] == -1) & (df['close'] < df['trailing_dn'])
-        df['cover_signal'] = (df['trend'] == 1) | (df['close'] > df['dn'])
-        
-        
-        print("\nDebug - CPU calculation completed:")
-        print(f"Trends generated: {df['trend'].value_counts().to_dict()}")
-        print(f"Signals generated: Buy={df['buy_signal'].sum()}, Sell={df['sell_signal'].sum()}")
-        print(f"Short={df['short_signal'].sum()}, Cover={df['cover_signal'].sum()}")
-        print("\nDebug - Signal Statistics:")
-        print(f"Total Bars: {len(df)}")
-        print(f"Buy Signals: {df['buy_signal'].sum()} ({(df['buy_signal'].sum()/len(df))*100:.2f}%)")
-        print(f"Sell Signals: {df['sell_signal'].sum()} ({(df['sell_signal'].sum()/len(df))*100:.2f}%)")
-        print(f"Short Signals: {df['short_signal'].sum()} ({(df['short_signal'].sum()/len(df))*100:.2f}%)")
-        print(f"Cover Signals: {df['cover_signal'].sum()} ({(df['cover_signal'].sum()/len(df))*100:.2f}%)")
-        return df
-        
-    except Exception as e:
-        error_msg = f"Error in CPU SuperTrend calculation: {str(e)}\n{traceback.format_exc()}"
-        print(f"\nDebug - Error in calculate_supertrend_cpu:")
         print(error_msg)
         logging.getLogger('processing_errors').error(error_msg)
         raise
@@ -803,10 +695,9 @@ def cleanup_gpu_memory():
         print(f"GPU memory cleanup error: {e}", end='\r')
 
 
-
 def backtest_supertrend(df, atr_length, factor, buffer_multiplier, hard_stop_distance):
     """
-    Optimized backtesting of the Supertrend strategy with hard stops
+    Optimized backtesting of the Supertrend strategy matching Pinescript logic
     
     Parameters:
     -----------
@@ -818,31 +709,35 @@ def backtest_supertrend(df, atr_length, factor, buffer_multiplier, hard_stop_dis
         SuperTrend factor multiplier
     buffer_multiplier : float
         Buffer zone multiplier
-    hard_stop_distance : int
-        Hard stop distance from SuperTrend line
+    hard_stop_distance : float
+        Fixed Hard Stop Distance (points)
     """
     try:
         # Calculate Supertrend and signals
         st_df = calculate_supertrend(df, atr_length, factor, buffer_multiplier)
         
-        # Add the signal validation block RIGHT HERE, before initializing trade variables
+        # Calculate hard stop lines based on trend direction as in Pinescript
+        st_df['up_trend_hard_stop'] = np.where(st_df['direction'] < 0,
+                                              st_df['supertrend'] - hard_stop_distance,
+                                              np.nan)
+        st_df['down_trend_hard_stop'] = np.where(st_df['direction'] > 0,
+                                                st_df['supertrend'] + hard_stop_distance,
+                                                np.nan)
+        
+        # Print signal validation
         signal_counts = {
             'buy': st_df['buy_signal'].sum(),
-            'sell': st_df['sell_signal'].sum(),
-            'short': st_df['short_signal'].sum(),
-            'cover': st_df['cover_signal'].sum()
+            'sell': st_df['sell_signal'].sum()
         }
         
         print("\nSignal Validation:")
         print(f"Buy Signals: {signal_counts['buy']} ({signal_counts['buy']/len(df)*100:.2f}%)")
         print(f"Sell Signals: {signal_counts['sell']} ({signal_counts['sell']/len(df)*100:.2f}%)")
-        print(f"Short Signals: {signal_counts['short']} ({signal_counts['short']/len(df)*100:.2f}%)")
-        print(f"Cover Signals: {signal_counts['cover']} ({signal_counts['cover']/len(df)*100:.2f}%)")
 
-        # Minimum signal threshold (0.1% of bars)
+        # Minimum signal threshold
         min_signals = max(int(len(df) * 0.001), 3)
-        if signal_counts['buy'] + signal_counts['short'] < min_signals:
-            print(f"\nWarning: Insufficient entry signals ({signal_counts['buy'] + signal_counts['short']}) - minimum required: {min_signals}")
+        if signal_counts['buy'] + signal_counts['sell'] < min_signals:
+            print(f"\nWarning: Insufficient entry signals ({signal_counts['buy'] + signal_counts['sell']}) - minimum required: {min_signals}")
             return {
                 'parameters': {
                     'atr_length': atr_length,
@@ -878,16 +773,9 @@ def backtest_supertrend(df, atr_length, factor, buffer_multiplier, hard_stop_dis
         close = st_df['close'].values
         high = st_df['high'].values
         low = st_df['low'].values
-        buy_signals = st_df['buy_signal'].values
-        sell_signals = st_df['sell_signal'].values
-        short_signals = st_df['short_signal'].values
-        cover_signals = st_df['cover_signal'].values
+        supertrend = st_df['supertrend'].values
+        direction = st_df['direction'].values
         dates = st_df.index.to_numpy()
-        supertrend = st_df['up'].values
-
-        # Print initial signal counts
-        print(f"\nInitial Signals - Buy: {buy_signals.sum()}, Sell: {sell_signals.sum()}, "
-              f"Short: {short_signals.sum()}, Cover: {cover_signals.sum()}", end='\r')
 
         # Loop through data for backtesting
         for i in range(1, len(st_df)):
@@ -900,13 +788,13 @@ def backtest_supertrend(df, atr_length, factor, buffer_multiplier, hard_stop_dis
                 exit_price = current_price
                 exit_type = "trend_flip"
 
-                # Check hard stop first
-                if low[i] <= (supertrend[i] - hard_stop_distance):
+                # Check hard stop first (matches Pinescript)
+                if low[i] <= st_df['up_trend_hard_stop'].iloc[i]:
                     exit_condition = True
-                    exit_price = max(low[i], supertrend[i] - hard_stop_distance)  # Realistic slippage
+                    exit_price = max(low[i], st_df['up_trend_hard_stop'].iloc[i])
                     exit_type = "hard_stop"
-                # Then check trend flip
-                elif sell_signals[i]:
+                # Then check trend flip (matches Pinescript)
+                elif direction[i] > 0:  # Direction change to downtrend
                     exit_condition = True
                     exit_type = "trend_flip"
 
@@ -932,23 +820,23 @@ def backtest_supertrend(df, atr_length, factor, buffer_multiplier, hard_stop_dis
                         'exit_price': exit_price,
                         'exit_type': exit_type,
                         'points': points,
-                        'duration': (current_time - entry_time).total_seconds() / 3600  # Duration in hours
+                        'duration': (current_time - entry_time).total_seconds() / 3600
                     })
                     in_long = False
 
             # Handle existing short position
-            if in_short:
+            elif in_short:
                 exit_condition = False
                 exit_price = current_price
                 exit_type = "trend_flip"
 
-                # Check hard stop first
-                if high[i] >= (supertrend[i] + hard_stop_distance):
+                # Check hard stop first (matches Pinescript)
+                if high[i] >= st_df['down_trend_hard_stop'].iloc[i]:
                     exit_condition = True
-                    exit_price = min(high[i], supertrend[i] + hard_stop_distance)  # Realistic slippage
+                    exit_price = min(high[i], st_df['down_trend_hard_stop'].iloc[i])
                     exit_type = "hard_stop"
-                # Then check trend flip
-                elif cover_signals[i]:
+                # Then check trend flip (matches Pinescript)
+                elif direction[i] < 0:  # Direction change to uptrend
                     exit_condition = True
                     exit_type = "trend_flip"
 
@@ -974,55 +862,38 @@ def backtest_supertrend(df, atr_length, factor, buffer_multiplier, hard_stop_dis
                         'exit_price': exit_price,
                         'exit_type': exit_type,
                         'points': points,
-                        'duration': (current_time - entry_time).total_seconds() / 3600  # Duration in hours
+                        'duration': (current_time - entry_time).total_seconds() / 3600
                     })
                     in_short = False
 
-            # Check for new entries
+            # Check for new entries using Pinescript logic
             if not in_long and not in_short:
-                if buy_signals[i]:
+                # Long entry condition
+                if st_df['buy_signal'].iloc[i]:
                     trade_number += 1
                     in_long = True
                     entry_price = current_price
                     entry_time = current_time
-                elif short_signals[i]:
+                # Short entry condition
+                elif st_df['sell_signal'].iloc[i]:
                     trade_number += 1
                     in_short = True
                     entry_price = current_price
                     entry_time = current_time
 
-        # Close any open position at the end of testing
-        if in_long:
-            points = close[-1] - entry_price
+        # Close any open position at the end
+        if in_long or in_short:
+            points = (close[-1] - entry_price) if in_long else (entry_price - close[-1])
             if points > 0:
                 gross_profit += points
                 winning_trades += 1
             else:
                 gross_loss += abs(points)
                 losing_trades += 1
-            trades.append({
-                'trade_number': trade_number,
-                'direction': 'long',
-                'entry_time': entry_time,
-                'entry_price': entry_price,
-                'exit_time': dates[-1],
-                'exit_price': close[-1],
-                'exit_type': 'end_of_data',
-                'points': points,
-                'duration': (dates[-1] - entry_time).total_seconds() / 3600
-            })
 
-        if in_short:
-            points = entry_price - close[-1]
-            if points > 0:
-                gross_profit += points
-                winning_trades += 1
-            else:
-                gross_loss += abs(points)
-                losing_trades += 1
             trades.append({
                 'trade_number': trade_number,
-                'direction': 'short',
+                'direction': 'long' if in_long else 'short',
                 'entry_time': entry_time,
                 'entry_price': entry_price,
                 'exit_time': dates[-1],
@@ -1036,18 +907,13 @@ def backtest_supertrend(df, atr_length, factor, buffer_multiplier, hard_stop_dis
         trade_count = len(trades)
         if trade_count > 0:
             win_rate = winning_trades / trade_count
-            avg_trade_duration = sum((t['exit_time'] - t['entry_time']).total_seconds() for t in trades) / trade_count
+            avg_trade_duration = sum(t['duration'] for t in trades) / trade_count
             profit_factor = abs(gross_profit / gross_loss) if gross_loss != 0 else float('inf')
             avg_win = gross_profit / winning_trades if winning_trades > 0 else 0
             avg_loss = gross_loss / losing_trades if losing_trades > 0 else 0
             risk_adjusted_return = avg_win / abs(avg_loss) if avg_loss != 0 else float('inf')
         else:
-            win_rate = 0
-            avg_trade_duration = 0
-            profit_factor = 0
-            risk_adjusted_return = 0
-            avg_win = 0
-            avg_loss = 0
+            win_rate = profit_factor = risk_adjusted_return = avg_win = avg_loss = avg_trade_duration = 0
 
         return {
             'parameters': {
@@ -1073,45 +939,12 @@ def backtest_supertrend(df, atr_length, factor, buffer_multiplier, hard_stop_dis
             'trades': trades
         }
         
-        
-        # Add this block right before the final return statement
-        min_trades = max(int(len(df) * 0.001), 5)  # Minimum 0.1% of bars or 5 trades
-        if trade_count < min_trades:
-            print(f"\nDebug - Insufficient trades: {trade_count} (minimum required: {min_trades})")
-            return {
-                'parameters': {
-                    'atr_length': atr_length,
-                    'factor': factor,
-                    'buffer_multiplier': buffer_multiplier,
-                    'hard_stop_distance': hard_stop_distance
-                },
-                'total_profit': 0,
-                'trade_count': 0,
-                'win_rate': 0,
-                'trades': []
-            }
-
-        # Original return statement
-        return {
-            'parameters': {
-                'atr_length': atr_length,
-                'factor': factor,
-                'buffer_multiplier': buffer_multiplier,
-                'hard_stop_distance': hard_stop_distance
-            },
-            'total_profit': gross_profit - gross_loss,
-            'gross_profit': gross_profit,
-            'gross_loss': gross_loss,
-            # ... rest of the return dictionary ...
-        }
-        
     except Exception as e:
-        logging.getLogger('processing_errors').error(
-            f"Error in backtest_supertrend (atr={atr_length}, factor={factor}, "
-            f"buffer={buffer_multiplier}, stop={hard_stop_distance}): {str(e)}\n"
-            f"{traceback.format_exc()}"
-        )
-
+        error_msg = f"Error in backtest_supertrend: {str(e)}\n{traceback.format_exc()}"
+        print(f"\nDebug - Error in backtest_supertrend:")
+        print(error_msg)
+        logging.getLogger('processing_errors').error(error_msg)
+        return None
 
 def process_param_combo(args):
     """Process a single parameter combination"""
