@@ -376,43 +376,6 @@ def load_ohlc_data(file_path):
 CURRENT_UTC = "2025-05-03 04:01:10"
 CURRENT_USER = "arullr001"
 
-@cuda.jit
-def calculate_supertrend(df, atr_length, factor, buffer_multiplier):
-    """Wrapper function that chooses between CPU or GPU implementation"""
-    try:
-        if cuda.is_available():
-            try:
-                device = cuda.get_current_device()
-                try:
-                    free_mem = device.mem_info()[0]
-                except AttributeError:
-                    try:
-                        free_mem = device.memory_info().free
-                    except AttributeError:
-                        try:
-                            ctx = cuda.current_context()
-                            free_mem = ctx.get_memory_info().free
-                        except AttributeError:
-                            print("Unable to determine GPU memory, falling back to CPU", end='\r')
-                            return calculate_supertrend_cpu(df, atr_length, factor, buffer_multiplier)
-
-                data_size = len(df) * 8 * 5
-                if free_mem > data_size * 3:
-                    return calculate_supertrend_gpu(df, atr_length, factor, buffer_multiplier)
-                else:
-                    print("Not enough GPU memory, falling back to CPU", end='\r')
-                    return calculate_supertrend_cpu(df, atr_length, factor, buffer_multiplier)
-            
-            except Exception as e:
-                print(f"GPU initialization failed, falling back to CPU: {str(e)}", end='\r')
-                return calculate_supertrend_cpu(df, atr_length, factor, buffer_multiplier)
-        
-        return calculate_supertrend_cpu(df, atr_length, factor, buffer_multiplier)
-    
-    except Exception as e:
-        print(f"Error in SuperTrend calculation, falling back to CPU: {str(e)}", end='\r')
-        return calculate_supertrend_cpu(df, atr_length, factor, buffer_multiplier)
-
 
 def calculate_supertrend_cpu(df, atr_length, factor, buffer_multiplier):
     """CPU version of SuperTrend calculation"""
@@ -1073,39 +1036,13 @@ class ResultsManager:
         self.dir_manager = directory_manager
         self.processing_logger = logging.getLogger('processing_errors')
         self.system_logger = logging.getLogger('system_errors')
-        self.cached_results = {}  # Add this to cache results
-
-    def cache_backtest_result(self, params_key, result):
-        """Cache backtest results to ensure consistency"""
-        self.cached_results[params_key] = result
-
-    def get_params_key(self, period, multiplier, price_range_1, long_target, short_target):
-        """Generate a unique key for parameter combination"""
-        return f"p{period}_m{multiplier:.2f}_r{price_range_1:.2f}_lt{long_target}_st{short_target}"
-
-    def get_or_run_backtest(self, df, period, multiplier, price_range_1, long_target, short_target):
-        """Get cached result or run new backtest"""
-        params_key = self.get_params_key(period, multiplier, price_range_1, long_target, short_target)
-        
-        if params_key in self.cached_results:
-            return self.cached_results[params_key]
-        
-        result = backtest_supertrend(
-            df,
-            period=period,
-            multiplier=multiplier,
-            price_range_1=price_range_1,
-            long_target=long_target,
-            short_target=short_target
-        )
-        
-        self.cached_results[params_key] = result
-        return result
+        self.cached_results = {}
 
     def create_performance_summary(self, final_results_df):
         """Creates and saves a performance summary of the results"""
         try:
             if final_results_df.empty:
+                print("\nNo results to summarize.")
                 return
 
             summary = {
@@ -1125,78 +1062,90 @@ class ResultsManager:
                     'median': float(final_results_df['total_profit'].median()),
                     'std': float(final_results_df['total_profit'].std()),
                 },
-                'timestamp': "2025-05-07 03:09:53",
-                'generated_by': "arullr001"
+                'timestamp': CURRENT_UTC,
+                'generated_by': CURRENT_USER
             }
 
             # Save summary to JSON
             summary_file = os.path.join(self.dir_manager.final_results_dir, 'performance_summary.json')
             with open(summary_file, 'w') as f:
                 json.dump(summary, f, indent=4)
-
-            # Create visualization
-            self.create_performance_visualizations(final_results_df)
+            print(f"\nPerformance summary saved to: {summary_file}")
 
         except Exception as e:
             self.processing_logger.error(f"Error creating performance summary: {str(e)}")
+            print(f"\nError creating performance summary: {str(e)}")
 
-        def save_top_combinations_trades(self, final_results_df, original_data, top_n=5):
-            """Saves detailed trade information for top performing parameter combinations"""
-            try:
-                if final_results_df.empty:
-                    return
+    def save_top_combinations_trades(self, final_results_df, original_data, top_n=5):
+        """Saves detailed trade information for top performing parameter combinations"""
+        try:
+            if final_results_df.empty:
+                print("\nNo results to save detailed trades.")
+                return
 
-                top_combinations = final_results_df.head(top_n)
-                detailed_results_dir = os.path.join(self.dir_manager.final_results_dir, 'detailed_results')
-                os.makedirs(detailed_results_dir, exist_ok=True)
+            top_combinations = final_results_df.head(top_n)
+            detailed_results_dir = os.path.join(self.dir_manager.final_results_dir, 'detailed_results')
+            os.makedirs(detailed_results_dir, exist_ok=True)
 
-                for idx, row in top_combinations.iterrows():
-                    try:
-                        result = backtest_supertrend(
-                            original_data,
-                            period=int(row['period']),
-                            multiplier=row['multiplier'],
-                            price_range_1=row['price_range_1'],
-                            long_target=row['long_target'],
-                            short_target=row['short_target']
-                        )
+            print(f"\nSaving detailed trade information for top {top_n} combinations...")
+            for idx, row in top_combinations.iterrows():
+                try:
+                    print(f"\nProcessing rank {idx + 1}...")
+                    result = backtest_supertrend(
+                        original_data,
+                        atr_length=row['atr_length'],
+                        factor=row['factor'],
+                        buffer_multiplier=row['buffer_multiplier'],
+                        hard_stop_distance=row['hard_stop_distance']
+                    )
 
-                        # Save trades to CSV
-                        trades_df = pd.DataFrame(result['trades'])
-                        if not trades_df.empty:
-                            trades_df['duration'] = pd.to_datetime(trades_df['exit_time']) - pd.to_datetime(trades_df['entry_time'])
+                    # Save trades to CSV
+                    trades_df = pd.DataFrame(result['trades'])
+                    if not trades_df.empty:
+                        trades_df['duration'] = pd.to_datetime(trades_df['exit_time']) - pd.to_datetime(trades_df['entry_time'])
                         
-                            filename = f'trades_rank_{idx+1}_p{int(row["period"])}_m{row["multiplier"]:.2f}_r{row["price_range_1"]:.2f}.csv'
-                            trades_df.to_csv(os.path.join(detailed_results_dir, filename), index=False)
+                        filename = f'trades_rank_{idx+1}_atr{int(row["atr_length"])}_f{row["factor"]:.2f}_b{row["buffer_multiplier"]:.2f}_s{int(row["hard_stop_distance"])}.csv'
+                        trades_file = os.path.join(detailed_results_dir, filename)
+                        trades_df.to_csv(trades_file, index=False)
+                        print(f"Saved trades to: {filename}")
 
-                            # Calculate and save statistics
-                            stats = {
-                                'rank': idx + 1,
-                                'parameters': row.to_dict(),
-                                'performance_metrics': {
-                                    'total_trades': result['trade_count'],
-                                    'total_profit': result['total_profit'],
-                                    'win_rate': f"{result['win_rate']:.2%}",
-                                    'avg_trade_duration': str(datetime.timedelta(seconds=result['avg_trade_duration'])),
-                                    'profit_factor': f"{result['profit_factor']:.2f}",
-                                    'risk_adjusted_return': f"{result['risk_adjusted_return']:.2f}",
-                                    'max_consecutive_wins': result['max_consecutive_wins'],
-                                    'max_consecutive_losses': result['max_consecutive_losses']
-                                }
-                            }
+                        # Calculate and save statistics
+                        stats = {
+                            'rank': idx + 1,
+                            'parameters': {
+                                'atr_length': int(row['atr_length']),
+                                'factor': float(row['factor']),
+                                'buffer_multiplier': float(row['buffer_multiplier']),
+                                'hard_stop_distance': int(row['hard_stop_distance'])
+                            },
+                            'performance_metrics': {
+                                'total_trades': result['trade_count'],
+                                'total_profit': result['total_profit'],
+                                'win_rate': f"{result['win_rate']:.2%}",
+                                'profit_factor': f"{result['profit_factor']:.2f}",
+                                'risk_adjusted_return': f"{result['risk_adjusted_return']:.2f}",
+                                'max_consecutive_wins': result['max_consecutive_wins'],
+                                'max_consecutive_losses': result['max_consecutive_losses']
+                            },
+                            'generated_at': CURRENT_UTC,
+                            'generated_by': CURRENT_USER
+                        }
 
-                            stats_filename = f'stats_rank_{idx+1}_p{int(row["period"])}_m{row["multiplier"]:.2f}_r{row["price_range_1"]:.2f}.json'
-                            with open(os.path.join(detailed_results_dir, stats_filename), 'w') as f:
-                                json.dump(stats, f, indent=4)
+                        stats_filename = f'stats_rank_{idx+1}_atr{int(row["atr_length"])}_f{row["factor"]:.2f}_b{row["buffer_multiplier"]:.2f}_s{int(row["hard_stop_distance"])}.json'
+                        stats_file = os.path.join(detailed_results_dir, stats_filename)
+                        with open(stats_file, 'w') as f:
+                            json.dump(stats, f, indent=4)
+                        print(f"Saved statistics to: {stats_filename}")
 
-                    except Exception as e:
-                        self.processing_logger.error(
-                            f"Error processing detailed results for combination {row.to_dict()}: {str(e)}"
-                        )
+                except Exception as e:
+                    self.processing_logger.error(
+                        f"Error processing detailed results for combination {row.to_dict()}: {str(e)}"
+                    )
+                    print(f"Error processing rank {idx + 1}: {str(e)}")
 
-            except Exception as e:
-                self.processing_logger.error(f"Error saving top combinations trades: {str(e)}")
-
+        except Exception as e:
+            self.processing_logger.error(f"Error saving top combinations trades: {str(e)}")
+            print(f"\nError saving top combinations trades: {str(e)}")
 
 def create_performance_visualizations(self, df):
     """Creates visualization plots for the results"""
@@ -1257,6 +1206,9 @@ def main():
     Main function to run the optimized Supertrend strategy backtester
     """
     try:
+        CURRENT_UTC = "2025-06-11 03:09:35"  # Updated timestamp
+        CURRENT_USER = "arullr001"           # Updated user
+        
         start_time = time.time()
         print("=" * 50)
         print(" SUPER TREND STRATEGY BACKTESTER (OPTIMIZED) ".center(50, "="))
@@ -1283,13 +1235,13 @@ def main():
 
         if not data_files:
             print("No data files found in the specified directory. Exiting.")
-            return
+            sys.exit(1)
 
         # Step 2: Let user select files to process
         selected_files = select_files_to_process(data_files)
         if not selected_files:
             print("No files selected for processing. Exiting.")
-            return
+            sys.exit(1)
 
         # Step 3: Get parameter inputs from user
         params = get_parameter_inputs()
@@ -1297,9 +1249,12 @@ def main():
         # Step 4: Process each file
         for file_path in selected_files:
             print(f"\nProcessing file: {os.path.basename(file_path)}")
+            
             try:
                 # Load OHLC data
                 df = load_ohlc_data(file_path)
+                print(f"\nLoaded data shape: {df.shape}")
+                print(f"Date range: {df.index.min()} to {df.index.max()}")
                 
                 # Save input data metadata
                 input_metadata = {
@@ -1313,8 +1268,10 @@ def main():
                     'processed_by': CURRENT_USER
                 }
                 
-                with open(os.path.join(dir_manager.final_results_dir, 'input_metadata.json'), 'w') as f:
+                metadata_file = os.path.join(dir_manager.final_results_dir, 'input_metadata.json')
+                with open(metadata_file, 'w') as f:
                     json.dump(input_metadata, f, indent=4)
+                print(f"Saved input metadata to: {metadata_file}")
 
                 # Generate parameter combinations
                 param_combinations = list(product(
@@ -1344,6 +1301,13 @@ def main():
                     try:
                         batch_results = []
                         for params in tqdm(current_batch, desc="Processing combinations", ncols=100):
+                            # Debug output for parameter combination
+                            print(f"\nTesting parameters:")
+                            print(f"  ATR Length: {params[0]}")
+                            print(f"  Factor: {params[1]}")
+                            print(f"  Buffer Multiplier: {params[2]}")
+                            print(f"  Hard Stop Distance: {params[3]}")
+
                             result = backtest_supertrend(
                                 df,
                                 atr_length=params[0],
@@ -1351,19 +1315,55 @@ def main():
                                 buffer_multiplier=params[2],
                                 hard_stop_distance=params[3]
                             )
-                            if result['trade_count'] > 0:  # Only keep results with trades
+
+                            # Debug output for results
+                            print(f"Results:")
+                            print(f"  Trade Count: {result['trade_count']}")
+                            print(f"  Total Profit: {result['total_profit']:.2f}")
+                            if result['trade_count'] > 0:
+                                print(f"  Win Rate: {result['win_rate']:.2%}")
+                                print(f"  Profit Factor: {result['profit_factor']:.2f}")
                                 batch_results.append(result)
+                                print(f"  Added to results (valid trades found)")
                         
                         if batch_results:
+                            # Save batch results immediately
+                            batch_data = []
+                            for r in batch_results:
+                                row = {
+                                    'atr_length': r['parameters']['atr_length'],
+                                    'factor': r['parameters']['factor'],
+                                    'buffer_multiplier': r['parameters']['buffer_multiplier'],
+                                    'hard_stop_distance': r['parameters']['hard_stop_distance'],
+                                    'total_profit': r['total_profit'],
+                                    'trade_count': r['trade_count'],
+                                    'win_rate': r['win_rate'],
+                                    'profit_factor': r['profit_factor'],
+                                    'risk_adjusted_return': r['risk_adjusted_return'],
+                                    'max_consecutive_wins': r['max_consecutive_wins'],
+                                    'max_consecutive_losses': r['max_consecutive_losses']
+                                }
+                                batch_data.append(row)
+
+                            batch_df = pd.DataFrame(batch_data)
+                            batch_file = os.path.join(
+                                dir_manager.csv_dumps_dir, 
+                                f'batch_{batch_processor.current_batch}.csv'
+                            )
+                            batch_df.to_csv(batch_file, index=False)
+                            print(f"\nSaved batch results to: {batch_file}")
+                            
                             all_results.extend(batch_results)
                             
                         batch_processor.current_batch += 1
                         cleanup_memory()
+                        print("\nBatch complete, memory cleaned")
                         
                     except Exception as e:
-                        logging.getLogger('processing_errors').error(
-                            f"Error processing batch starting at {batch_start}: {str(e)}"
-                        )
+                        error_msg = f"Error processing batch starting at {batch_start}: {str(e)}"
+                        logging.getLogger('processing_errors').error(error_msg)
+                        print(f"\nError: {error_msg}")
+                        continue
 
                 # Create DataFrame from all results
                 if all_results:
@@ -1400,67 +1400,6 @@ def main():
                         # Save detailed trade information for top combinations
                         results_manager.save_top_combinations_trades(final_results_df, df)
 
-                        # Create summary file
-                        try:
-                            summary_file_path = os.path.join(
-                                dir_manager.final_results_dir, 
-                                f'optimization_summary_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt'
-                            )
-                            
-                            with open(summary_file_path, 'w') as f:
-                                f.write("=" * 50 + "\n")
-                                f.write(" SUPERTREND OPTIMIZATION SUMMARY ".center(50, "=") + "\n")
-                                f.write("=" * 50 + "\n\n")
-                                
-                                f.write(f"Date and Time (UTC): {CURRENT_UTC}\n")
-                                f.write(f"User: {CURRENT_USER}\n\n")
-                                
-                                f.write("PARAMETERS TESTED:\n")
-                                f.write("-----------------\n")
-                                f.write(f"ATR Length range: {params['atr_lengths'][0]} to {params['atr_lengths'][-1]} "
-                                      f"(step {params['atr_lengths'][1] - params['atr_lengths'][0] if len(params['atr_lengths']) > 1 else 0})\n")
-                                f.write(f"Factor range: {params['factors'][0]:.2f} to {params['factors'][-1]:.2f} "
-                                      f"(step {params['factors'][1] - params['factors'][0] if len(params['factors']) > 1 else 0:.2f})\n")
-                                f.write(f"Buffer range: {params['buffers'][0]:.2f} to {params['buffers'][-1]:.2f} "
-                                      f"(step {params['buffers'][1] - params['buffers'][0] if len(params['buffers']) > 1 else 0:.2f})\n")
-                                f.write(f"Hard Stop range: {params['stops'][0]} to {params['stops'][-1]} "
-                                      f"(step {params['stops'][1] - params['stops'][0] if len(params['stops']) > 1 else 0})\n")
-                                f.write(f"Total Combinations Tested: {total_combinations}\n\n")
-                                
-                                f.write("TOP 5 RESULTS:\n")
-                                f.write("-------------\n")
-                                if not final_results_df.empty:
-                                    top_5 = final_results_df.head()
-                                    for idx, row in top_5.iterrows():
-                                        f.write(f"\nRank {idx + 1}:\n")
-                                        f.write(f"ATR Length: {row['atr_length']}\n")
-                                        f.write(f"Factor: {row['factor']:.2f}\n")
-                                        f.write(f"Buffer Multiplier: {row['buffer_multiplier']:.2f}\n")
-                                        f.write(f"Hard Stop Distance: {row['hard_stop_distance']}\n")
-                                        f.write(f"Total Profit: {row['total_profit']:.2f}\n")
-                                        f.write(f"Trade Count: {row['trade_count']}\n")
-                                        f.write(f"Win Rate: {row['win_rate']:.2%}\n")
-                                
-                                end_time = time.time()
-                                duration = end_time - start_time
-                                hours = int(duration // 3600)
-                                minutes = int((duration % 3600) // 60)
-                                seconds = int(duration % 60)
-                                
-                                f.write(f"\nPROCESSING DURATION:\n")
-                                f.write("-------------------\n")
-                                f.write(f"Total Time: {hours:02d}:{minutes:02d}:{seconds:02d} (HH:MM:SS)\n")
-                                
-                                f.write("\n" + "=" * 50 + "\n")
-                                f.write("End of Summary".center(50, "=") + "\n")
-                                f.write("=" * 50 + "\n")
-
-                            print(f"\nSummary saved to: {summary_file_path}")
-
-                        except Exception as e:
-                            logging.getLogger('system_errors').error(f"Error creating summary file: {str(e)}")
-                            print("Error creating summary file. Check error logs for details.")
-
                         print("\nTop 5 combinations:")
                         print(final_results_df[['atr_length', 'factor', 'buffer_multiplier', 
                                             'hard_stop_distance', 'total_profit', 'trade_count', 
@@ -1471,33 +1410,30 @@ def main():
                     print("\nNo results generated from the backtest.")
 
             except Exception as e:
-                logging.getLogger('processing_errors').error(
-                    f"Error processing file {file_path}: {str(e)}\n{traceback.format_exc()}"
-                )
-                print(f"Error processing file {file_path}. Check error logs for details.")
+                error_msg = f"Error processing file {file_path}: {str(e)}\n{traceback.format_exc()}"
+                logging.getLogger('processing_errors').error(error_msg)
+                print(f"\nError processing file {file_path}. Check error logs for details.")
                 continue
 
         print("\nProcessing complete. Check the results directory for detailed analysis.")
         print(f"Results directory: {dir_manager.base_dir}")
         print(f"Completed at (UTC): {CURRENT_UTC}")
         
-        # Exit the program
+        # Clean exit
         print("\nExiting program...")
         sys.exit(0)
 
     except Exception as e:
-        logging.getLogger('system_errors').error(
-            f"System error: {str(e)}\n{traceback.format_exc()}"
-        )
-        print("A system error occurred. Check error logs for details.")
-      
+        error_msg = f"System error: {str(e)}\n{traceback.format_exc()}"
+        logging.getLogger('system_errors').error(error_msg)
+        print("\nA system error occurred. Check error logs for details.")
+        sys.exit(1)
+        
     finally:
-        print("\nCleaning up and exiting...")
+        print("\nCleaning up...")
         cleanup_memory()
-        sys.exit(0)
 
-
-# Only have ONE if __name__ == "__main__": block
+# Make sure this follows immediately after the main() function
 if __name__ == "__main__":
     try:
         main()
