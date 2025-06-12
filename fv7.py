@@ -385,7 +385,10 @@ def check_gpu_availability():
         if cuda.is_available():
             cuda.select_device(0)
             device = cuda.get_current_device()
-            print(f"CUDA Device Available: {device.name.decode('utf-8') if hasattr(device.name, 'decode') else device.name}")
+            name = device.name
+            if isinstance(name, bytes):
+                name = name.decode('utf-8')
+            print(f"CUDA Device Available: {name}")
             return True
         else:
             print("No CUDA-capable GPU found, will use CPU implementation")
@@ -393,8 +396,11 @@ def check_gpu_availability():
     except Exception as e:
         print(f"Error checking GPU availability: {str(e)}")
         print("Will use CPU implementation")
-        return False
-        
+        return False       
+
+
+HAS_GPU = check_gp
+
         
 # Update the timestamp constant
 CURRENT_UTC = "2025-05-03 04:01:10"
@@ -1708,31 +1714,28 @@ class GPUManager:
         try:
             gpu_list = []
             if cuda.is_available():
-                for gpu_id in range(cuda.get_current_device().get_attribute(cuda.driver.CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_BLOCK)):
-                    try:
-                        cuda.select_device(gpu_id)
-                        device = cuda.get_current_device()
-                        try:
-                            free_mem = device.get_memory_info().free
-                        except:
-                            ctx = cuda.current_context()
-                            free_mem = ctx.get_memory_info().free
-
-                        gpu = {
-                            'id': gpu_id,
-                            'name': device.name.decode('utf-8') if hasattr(device.name, 'decode') else device.name,
-                            'free_memory': free_mem
-                        }
-                        gpu_list.append(gpu)
-                        print(f"GPU {gpu_id}: {gpu['name']}")
-                    except Exception as e:
-                        self.logger.error(f"Error accessing GPU {gpu_id}: {str(e)}")
-                        continue
+                try:
+                    device = cuda.get_current_device()
+                    ctx = cuda.current_context()
+                    free_mem = ctx.get_memory_info().free
+                    
+                    name = device.name
+                    if isinstance(name, bytes):
+                        name = name.decode('utf-8')
+                        
+                    gpu = {
+                        'id': 0,
+                        'name': name,
+                        'free_memory': free_mem
+                    }
+                    gpu_list.append(gpu)
+                    print(f"GPU 0: {gpu['name']}")
+                except Exception as e:
+                    self.logger.error(f"Error accessing GPU: {str(e)}")
             return gpu_list
         except Exception as e:
             self.logger.error(f"Error getting GPU list: {str(e)}")
             return []
-
 
 class ProgressTracker:
     """Tracks and displays progress of parameter combinations testing"""
@@ -1802,6 +1805,8 @@ class ProgressTracker:
                 json.dump(progress_data, f, indent=4)
         except Exception as e:
             print(f"Error saving progress: {str(e)}")
+
+
 
 def main():
     """
