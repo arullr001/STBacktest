@@ -782,24 +782,41 @@ def cleanup_gpu_memory():
 
 class StatusDisplay:
     """Tracks and displays progress of parameter combinations testing"""
-    def __init__(self, params, total_combinations, filename, filters):
-        # Initialize instance variables first
-        self.params = params
-        self.total_combinations = total_combinations
-        self.filename = filename
-        self.current_combo = 0
-        self.start_time = time.time()
-        self.top_combinations = []
-        self.running = True
-        # Initialize filters with default values if not provided
-        self.filters = filters if filters is not None else {
-            'use_drawdown': False,
-            'use_profit': False,
-            'max_drawdown': None,
-            'min_profit': None
-        }
-        # Initial draw after all attributes are initialized
-        self._draw_box()
+    def __init__(self, params, total_combinations, filename, filters=None):
+        print("Debug: Initializing StatusDisplay")  # Debug output
+        
+        try:
+            # Initialize filters first
+            print("Debug: Setting up filters")  # Debug output
+            if filters is None:
+                print("Debug: No filters provided, using defaults")  # Debug output
+                self.filters = {
+                    'use_drawdown': False,
+                    'use_profit': False,
+                    'max_drawdown': None,
+                    'min_profit': None
+                }
+            else:
+                print("Debug: Using provided filters")  # Debug output
+                self.filters = filters
+
+            # Initialize other attributes
+            print("Debug: Setting up other attributes")  # Debug output
+            self.params = params
+            self.total_combinations = total_combinations
+            self.filename = filename
+            self.current_combo = 0
+            self.start_time = time.time()
+            self.top_combinations = []
+            self.running = True
+
+            print("Debug: About to draw box")  # Debug output
+            self._draw_box()
+            
+        except Exception as e:
+            print(f"Error in StatusDisplay initialization: {str(e)}")
+            print(f"Traceback: {traceback.format_exc()}")
+            raise
 
     def _format_time(self, seconds):
         hours = int(seconds // 3600)
@@ -813,13 +830,16 @@ class StatusDisplay:
 
     def _draw_box(self):
         try:
+            print("Debug: Starting _draw_box")  # Debug output
+            print(f"Debug: Current filters: {self.filters}")  # Debug output
+            
             # Clear previous display (if any)
-            self._clear_lines(20)  # Increased to accommodate filtering info
+            self._clear_lines(20)
 
             # Box top
             print("=" * 70)
             print("║" + " SUPERTREND BACKTESTER STATUS ".center(68) + "║")
-            print("║" + f" 2025-06-14 16:53:08 UTC ".center(68) + "║")
+            print("║" + f" 2025-06-14 17:09:33 UTC ".center(68) + "║")
             print("=" * 70)
 
             # Parameter ranges
@@ -835,11 +855,15 @@ class StatusDisplay:
 
             # Filtering information
             print("║ Filtering Settings:".ljust(69) + "║")
-            if self.filters.get('use_drawdown', False) or self.filters.get('use_profit', False):
-                if self.filters.get('use_drawdown', False):
+            # Safely access filter settings
+            use_drawdown = self.filters.get('use_drawdown', False)
+            use_profit = self.filters.get('use_profit', False)
+            
+            if use_drawdown or use_profit:
+                if use_drawdown:
                     max_dd = self.filters.get('max_drawdown', 0)
                     print(f"║ Max Drawdown: {max_dd:.1%}".ljust(69) + "║")
-                if self.filters.get('use_profit', False):
+                if use_profit:
                     min_profit = self.filters.get('min_profit', 0)
                     print(f"║ Min Profit: {min_profit:.1%}".ljust(69) + "║")
             else:
@@ -882,7 +906,8 @@ class StatusDisplay:
 
         except Exception as e:
             print(f"Error in _draw_box: {str(e)}")
-            traceback.print_exc()
+            print(f"Traceback: {traceback.format_exc()}")
+            raise
 
     def update(self, current_combo, top_combo=None):
         self.current_combo = current_combo
@@ -908,8 +933,6 @@ class StatusDisplay:
     def cleanup(self):
         self.running = False
         print("\n" * 20)  # Move cursor below status box
-
-
 
 def backtest_supertrend(df, atr_length, factor, buffer_multiplier, hard_stop_distance):
     """
@@ -2108,7 +2131,13 @@ def main():
         params = get_parameter_inputs()
 
         # Step 4: Get filtering preferences
+        print("\nSetting up filtering preferences...")
         filters = get_filtering_preferences()
+
+        # Debug output to verify filters
+        print("\nDebug: Filters configuration:")
+        print(f"Filters: {filters}")
+
 
         # Store filtering preferences in metadata
         metadata = {
@@ -2123,13 +2152,7 @@ def main():
         with open(metadata_file, 'w') as f:
             json.dump(metadata, f, indent=4)
 
-        # Validate parameter ranges for 5-minute timeframe
-        if min(params['atr_lengths']) < 8 or max(params['atr_lengths']) > 30:
-            print("\nWarning: ATR Length is outside recommended range for 5-minute timeframe")
-            proceed = input("Continue anyway? (y/n): ").lower().strip() == 'y'
-            if not proceed:
-                sys.exit(0)        
-
+        
         # Generate parameter combinations
         param_combinations = list(product(
             params['atr_lengths'],
@@ -2149,6 +2172,9 @@ def main():
             proceed = input("Continue anyway? (y/n): ").lower().strip() == 'y'
             if not proceed:
                 sys.exit(0)
+
+        print("\nInitializing status display...")
+        print(f"Debug: Filters being passed to StatusDisplay: {filters}")
 
         # Initialize status display
         status_display = StatusDisplay(
@@ -2282,3 +2308,4 @@ if __name__ == "__main__":
         print(f"An error occurred: {str(e)}")
         logging.getLogger('system_errors').error(f"Fatal error: {str(e)}\n{traceback.format_exc()}")
         sys.exit(1)
+
