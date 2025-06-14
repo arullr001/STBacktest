@@ -781,7 +781,9 @@ def cleanup_gpu_memory():
 
 
 class StatusDisplay:
+    """Tracks and displays progress of parameter combinations testing"""
     def __init__(self, params, total_combinations, filename, filters):
+        # Initialize instance variables first
         self.params = params
         self.total_combinations = total_combinations
         self.filename = filename
@@ -789,9 +791,15 @@ class StatusDisplay:
         self.start_time = time.time()
         self.top_combinations = []
         self.running = True
-        # Initial draw
+        # Initialize filters with default values if not provided
+        self.filters = filters if filters is not None else {
+            'use_drawdown': False,
+            'use_profit': False,
+            'max_drawdown': None,
+            'min_profit': None
+        }
+        # Initial draw after all attributes are initialized
         self._draw_box()
-        self.filters = filters
 
     def _format_time(self, seconds):
         hours = int(seconds // 3600)
@@ -804,71 +812,77 @@ class StatusDisplay:
             print('\033[F\033[K', end='')
 
     def _draw_box(self):
-        # Clear previous display (17 lines)
-        self._clear_lines(17)
+        try:
+            # Clear previous display (if any)
+            self._clear_lines(20)  # Increased to accommodate filtering info
 
-        # Box top
-        print("=" * 70)
-        print("║" + " SUPERTREND BACKTESTER STATUS ".center(68) + "║")
-        print("║" + f" {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC ".center(68) + "║")
-        print("=" * 70)
+            # Box top
+            print("=" * 70)
+            print("║" + " SUPERTREND BACKTESTER STATUS ".center(68) + "║")
+            print("║" + f" 2025-06-14 16:53:08 UTC ".center(68) + "║")
+            print("=" * 70)
 
-        # Parameter ranges
-        print("║ Parameter Ranges:".ljust(69) + "║")
-        atr_range = f"ATR: {min(self.params['atr_lengths'])}-{max(self.params['atr_lengths'])} (step {self.params['atr_lengths'][1]-self.params['atr_lengths'][0]})"
-        factor_range = f"Factor: {min(self.params['factors']):.1f}-{max(self.params['factors']):.1f} (step {self.params['factors'][1]-self.params['factors'][0]:.1f})"
-        print(f"║ {atr_range:<30} {factor_range:<37}║")
+            # Parameter ranges
+            print("║ Parameter Ranges:".ljust(69) + "║")
+            atr_range = f"ATR: {min(self.params['atr_lengths'])}-{max(self.params['atr_lengths'])} (step {self.params['atr_lengths'][1]-self.params['atr_lengths'][0]})"
+            factor_range = f"Factor: {min(self.params['factors']):.1f}-{max(self.params['factors']):.1f} (step {self.params['factors'][1]-self.params['factors'][0]:.1f})"
+            print(f"║ {atr_range:<30} {factor_range:<37}║")
 
-        buffer_range = f"Buffer: {min(self.params['buffers']):.1f}-{max(self.params['buffers']):.1f} (step {self.params['buffers'][1]-self.params['buffers'][0]:.1f})"
-        stop_range = f"Stop: {min(self.params['stops'])}-{max(self.params['stops'])} (step {self.params['stops'][1]-self.params['stops'][0]})"
-        print(f"║ {buffer_range:<30} {stop_range:<37}║")
-        print("=" * 70)
+            buffer_range = f"Buffer: {min(self.params['buffers']):.1f}-{max(self.params['buffers']):.1f} (step {self.params['buffers'][1]-self.params['buffers'][0]:.1f})"
+            stop_range = f"Stop: {min(self.params['stops'])}-{max(self.params['stops'])} (step {self.params['stops'][1]-self.params['stops'][0]})"
+            print(f"║ {buffer_range:<30} {stop_range:<37}║")
+            print("=" * 70)
 
-        # File and progress info
-        print(f"║ File: {os.path.basename(self.filename):<61}║")
-        progress = f"{self.current_combo:,}/{self.total_combinations:,} ({(self.current_combo/self.total_combinations)*100:.1f}%)"
-        print(f"║ Progress: {progress:<58}║")
-        print("=" * 70)
+            # Filtering information
+            print("║ Filtering Settings:".ljust(69) + "║")
+            if self.filters.get('use_drawdown', False) or self.filters.get('use_profit', False):
+                if self.filters.get('use_drawdown', False):
+                    max_dd = self.filters.get('max_drawdown', 0)
+                    print(f"║ Max Drawdown: {max_dd:.1%}".ljust(69) + "║")
+                if self.filters.get('use_profit', False):
+                    min_profit = self.filters.get('min_profit', 0)
+                    print(f"║ Min Profit: {min_profit:.1%}".ljust(69) + "║")
+            else:
+                print("║ No filters applied".ljust(69) + "║")
+            print("=" * 70)
 
-        # Time info
-        elapsed = time.time() - self.start_time
-        elapsed_str = self._format_time(elapsed)
-        print(f"║ Time Elapsed: {elapsed_str:<55}║")
-        
-        # Add filtering information
-        print("=" * 70)
-        print("║ Filtering Settings:".ljust(69) + "║")
-        if self.filters['use_drawdown'] or self.filters['use_profit']:
-            if self.filters['use_drawdown']:
-                print(f"║ Max Drawdown: {self.filters['max_drawdown']:.1%}".ljust(69) + "║")
-            if self.filters['use_profit']:
-                print(f"║ Min Profit: {self.filters['min_profit']:.1%}".ljust(69) + "║")
-        else:
-            print("║ No filters applied".ljust(69) + "║")
-        print("=" * 70)
-        
-        if self.current_combo > 0:
-            remaining = (elapsed / self.current_combo) * (self.total_combinations - self.current_combo)
-            eta_str = self._format_time(remaining)
-            print(f"║ ETA: {eta_str:<62}║")
-        else:
-            print("║" + " " * 68 + "║")
-        print("=" * 70)
+            # File and progress info
+            print(f"║ File: {os.path.basename(self.filename):<61}║")
+            progress = f"{self.current_combo:,}/{self.total_combinations:,} ({(self.current_combo/self.total_combinations)*100:.1f}%)"
+            print(f"║ Progress: {progress:<58}║")
+            print("=" * 70)
 
-        # Top combinations
-        print("║ Top 3 Combinations (by Profit Factor):".ljust(69) + "║")
-        for i, combo in enumerate(self.top_combinations[-3:], 1):
-            combo_str = (f"{i}. ATR:{combo['atr']} F:{combo['factor']:.1f} "
-                       f"B:{combo['buffer']:.1f} S:{combo['stop']}")
-            metrics_str = f"PF:{combo['pf']:.2f} | WR:{combo['wr']:.1%} | Trades:{combo['trades']}"
-            print(f"║ {combo_str:<35} {metrics_str:<32}║")
-        
-        # Fill remaining lines if less than 3 combinations
-        for _ in range(3 - len(self.top_combinations)):
-            print("║" + " " * 68 + "║")
-        
-        print("=" * 70)
-        sys.stdout.flush()
+            # Time info
+            elapsed = time.time() - self.start_time
+            elapsed_str = self._format_time(elapsed)
+            print(f"║ Time Elapsed: {elapsed_str:<55}║")
+            
+            if self.current_combo > 0:
+                remaining = (elapsed / self.current_combo) * (self.total_combinations - self.current_combo)
+                eta_str = self._format_time(remaining)
+                print(f"║ ETA: {eta_str:<62}║")
+            else:
+                print("║" + " " * 68 + "║")
+            print("=" * 70)
+
+            # Top combinations
+            print("║ Top 3 Combinations (by Profit Factor):".ljust(69) + "║")
+            for i, combo in enumerate(self.top_combinations[-3:], 1):
+                combo_str = (f"{i}. ATR:{combo['atr']} F:{combo['factor']:.1f} "
+                           f"B:{combo['buffer']:.1f} S:{combo['stop']}")
+                metrics_str = f"PF:{combo['pf']:.2f} | WR:{combo['wr']:.1%} | Trades:{combo['trades']}"
+                print(f"║ {combo_str:<35} {metrics_str:<32}║")
+            
+            # Fill remaining lines if less than 3 combinations
+            for _ in range(3 - len(self.top_combinations)):
+                print("║" + " " * 68 + "║")
+            
+            print("=" * 70)
+            sys.stdout.flush()
+
+        except Exception as e:
+            print(f"Error in _draw_box: {str(e)}")
+            traceback.print_exc()
 
     def update(self, current_combo, top_combo=None):
         self.current_combo = current_combo
@@ -893,7 +907,7 @@ class StatusDisplay:
 
     def cleanup(self):
         self.running = False
-        print("\n" * 18)  # Move cursor below status box
+        print("\n" * 20)  # Move cursor below status box
 
 
 
@@ -2093,12 +2107,12 @@ def main():
         
         params = get_parameter_inputs()
 
-        # Get filtering preferences
+        # Step 4: Get filtering preferences
         filters = get_filtering_preferences()
 
         # Store filtering preferences in metadata
         metadata = {
-            'timestamp': "2025-06-14 16:35:07",
+            'timestamp': "2025-06-14 16:44:31",
             'user': "arullr001",
             'filtering_preferences': filters,
             'parameters': params
@@ -2114,7 +2128,7 @@ def main():
             print("\nWarning: ATR Length is outside recommended range for 5-minute timeframe")
             proceed = input("Continue anyway? (y/n): ").lower().strip() == 'y'
             if not proceed:
-                sys.exit(0)
+                sys.exit(0)        
 
         # Generate parameter combinations
         param_combinations = list(product(
@@ -2268,4 +2282,3 @@ if __name__ == "__main__":
         print(f"An error occurred: {str(e)}")
         logging.getLogger('system_errors').error(f"Fatal error: {str(e)}\n{traceback.format_exc()}")
         sys.exit(1)
-
