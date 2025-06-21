@@ -1271,7 +1271,21 @@ def rank_parameter_combinations(self, final_results_df, filters):
 
         print("\nTop 5 Parameter Combinations:")
         for idx, (_, row) in enumerate(top_5.iterrows(), 1):
-            # Use .get() with defaults to handle missing fields safely
+            # Critical fix: Create metrics dictionary carefully to avoid KeyError
+            metrics_dict = {
+                'profit_factor': float(row.get('profit_factor', 0.0)),
+                'sharpe_ratio': float(row.get('sharpe_ratio', 0.0)),
+                'win_rate': float(row.get('win_rate', 0.0)),
+                'max_drawdown': float(row.get('max_drawdown', 0.0)),
+                'total_profit': float(row.get('total_profit', 0.0)),
+                'expectancy': float(row.get('expectancy', 0.0)),
+                'trade_count': int(row.get('trade_count', 0))
+            }
+            
+            # Only add avg_trade_duration if it exists
+            if 'avg_trade_duration' in row and not pd.isna(row['avg_trade_duration']):
+                metrics_dict['avg_trade_duration'] = float(row['avg_trade_duration'])
+            
             combo_data = {
                 'rank': idx,
                 'parameters': {
@@ -1280,21 +1294,9 @@ def rank_parameter_combinations(self, final_results_df, filters):
                     'buffer_multiplier': float(row.get('buffer_multiplier', 0.0)),
                     'hard_stop_distance': float(row.get('hard_stop_distance', 0.0))
                 },
-                'metrics': {
-                    'profit_factor': float(row.get('profit_factor', 0.0)),
-                    'sharpe_ratio': float(row.get('sharpe_ratio', 0.0)),
-                    'win_rate': float(row.get('win_rate', 0.0)),
-                    'max_drawdown': float(row.get('max_drawdown', 0.0)),
-                    'total_profit': float(row.get('total_profit', 0.0)),
-                    'expectancy': float(row.get('expectancy', 0.0)),
-                    'trade_count': int(row.get('trade_count', 0))
-                }
+                'metrics': metrics_dict
             }
             
-            # Only include avg_trade_duration if it exists
-            if 'avg_trade_duration' in row:
-                combo_data['metrics']['avg_trade_duration'] = float(row.get('avg_trade_duration', 0.0))
-                
             summary_data['top_5_combinations'].append(combo_data)
         
             print(f"\nRank {idx}:")
@@ -1307,8 +1309,8 @@ def rank_parameter_combinations(self, final_results_df, filters):
             print(f"Net Profit: {row.get('total_profit', 0.0):.2f}")
             print(f"Total Trades: {int(row.get('trade_count', 0))}")
             
-            # Only print avg_trade_duration if it exists
-            if 'avg_trade_duration' in row:
+            # Only print avg_trade_duration if it exists and is not NaN
+            if 'avg_trade_duration' in row and not pd.isna(row['avg_trade_duration']):
                 print(f"Avg Duration: {row.get('avg_trade_duration', 0.0):.2f} hours")
 
         # Save summary to JSON
@@ -1319,11 +1321,10 @@ def rank_parameter_combinations(self, final_results_df, filters):
         return top_5
 
     except Exception as e:
-        self.processing_logger.error(f"Error ranking parameter combinations: {str(e)}")
-        print(f"\nError ranking parameter combinations: {str(e)}")
-        print(traceback.format_exc())
+        error_msg = f"Error ranking parameter combinations: {str(e)}"
+        print(f"\n{error_msg}")
+        print(traceback.format_exc())  # Print full stack trace for better debugging
         return pd.DataFrame()
-
 
 def process_param_combo(args):
     """Process a single parameter combination with enhanced debugging"""
