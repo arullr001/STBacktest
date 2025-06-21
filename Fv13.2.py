@@ -183,40 +183,40 @@ def get_filtering_preferences():
     if use_filters:
         use_drawdown = input("Use maximum drawdown filter? (y/n): ").lower().strip() == 'y'
         use_profit = input("Use minimum profit filter? (y/n): ").lower().strip() == 'y'
+        use_min_trades = input("Use minimum trade count filter? (y/n): ").lower().strip() == 'y'
         
         filters = {
             'use_drawdown': use_drawdown,
             'use_profit': use_profit,
+            'use_min_trades': use_min_trades,
             'max_drawdown': None,
-            'min_profit': None
+            'min_profit': None,
+            'min_trades': None
         }
         
         if use_drawdown:
-            filters['max_drawdown'] = get_float_input(
-                "Maximum allowed drawdown (as decimal, default 0.30 for 30%): ",
-                min_value=0.0,
-                max_value=1.0
-            ) or 0.30
+            max_dd = input("Maximum allowed drawdown (as decimal, default 0.30 for 30%): ").strip()
+            filters['max_drawdown'] = float(max_dd) if max_dd else 0.30
             
         if use_profit:
-            filters['min_profit'] = get_float_input(
-                "Minimum required profit (as decimal, default 0.15 for 15%): ",
-                min_value=0.0
-            ) or 0.15
+            min_profit = input("Minimum required profit (as decimal, default 0.15 for 15%): ").strip()
+            filters['min_profit'] = float(min_profit) if min_profit else 0.15
+            
+        if use_min_trades:
+            min_trades = input("Minimum required number of trades (default 30): ").strip()
+            filters['min_trades'] = int(min_trades) if min_trades else 30
     else:
         filters = {
             'use_drawdown': False,
             'use_profit': False,
+            'use_min_trades': True,  # Default to using min_trades filter
             'max_drawdown': None,
-            'min_profit': None
+            'min_profit': None,
+            'min_trades': 30  # Default minimum trade count
         }
     
     return filters
 
-        
-# First, update the timestamp constants
-CURRENT_UTC = "2025-05-03 20:22:21"
-CURRENT_USER = "arullr001"
 
 class DirectoryManager:
     """Manages directory structure for the application"""
@@ -459,77 +459,109 @@ def check_gpu_availability():
 # Set the global variable correctly
 HAS_GPU = check_gpu_availability()
 
-        
-# Update the timestamp constant
-CURRENT_UTC = "2025-05-03 04:01:10"
-CURRENT_USER = "arullr001"
 
 
 def calculate_supertrend_cpu(df, atr_length, factor, buffer_multiplier):
-    """
-    CPU implementation of SuperTrend calculation matching Pinescript and your entry logic
-    """
-    df = df.copy()
-    high = df['high'].values
-    low = df['low'].values
-    close = df['close'].values
+    """CPU implementation of SuperTrend calculation matching Pinescript"""
+    print("\nDebug - Starting CPU SuperTrend calculation")
+    print(f"Parameters: ATR={atr_length}, Factor={factor}, Buffer={buffer_multiplier}")
+    
+    try:
+        df = df.copy()
+        
+        # Calculate ATR and dynamic buffer
+        high = df['high'].values
+        low = df['low'].values
+        close = df['close'].values
+        
+        tr = np.zeros(len(df))
+        atr = np.zeros(len(df))
+        
+        # Calculate TR and ATR exactly as in Pinescript
+        for i in range(len(df)):
+            if i == 0:
+                tr[i] = high[i] - low[i]
+                atr[i] = tr[i]
+            else:
+                tr[i] = max(high[i] - low[i],
+                           abs(high[i] - close[i-1]),
+                           abs(low[i] - close[i-1]))
+                atr[i] = (atr[i-1] * (atr_length - 1) + tr[i]) / atr_length
+        
+        # Calculate dynamic buffer as in Pinescript
+        dynamic_buffer = atr * buffer_multiplier
+        
+        # Calculate basic bands
+        hl2 = (high + low) / 2
+        basic_upperband = hl2 + (factor * atr)
+        basic_lowerband = hl2 - (factor * atr)
+        
+        # Initialize arrays
+        final_upperband = np.zeros(len(df))
+        final_lowerband = np.zeros(len(df))
+        supertrend = np.zeros(len(df))
+        direction = np.zeros(len(df))
+        
+        # Calculate Supertrend
+        for i in range(1, len(df)):
+            # Calculate upper band
+            if basic_upperband[i] < final_upperband[i-1] or close[i-1] > final_upperband[i-1]:
+                final_upperband[i] = basic_upperband[i]
+            else:
+                final_upperband[i] = final_upperband[i-1]
+                
+            # Calculate lower band
+            if basic_lowerband[i] > final_lowerband[i-1] or close[i-1] < final_lowerband[i-1]:
+                final_lowerband[i] = basic_lowerband[i]
+            else:
+                final_lowerband[i] = final_lowerband[i-1]
+            
+            # Determine trend direction
+            if close[i] > final_upperband[i-1]:
+                direction[i] = -1  # Uptrend (matching Pinescript's direction)
+                supertrend[i] = final_lowerband[i]
+            elif close[i] < final_lowerband[i-1]:
+                direction[i] = 1   # Downtrend (matching Pinescript's direction)
+                supertrend[i] = final_upperband[i]
+            else:
+                direction[i] = direction[i-1]
+                supertrend[i] = supertrend[i-1]
+        
+        # Add results to DataFrame
+        df['supertrend'] = supertrend
+        df['direction'] = direction
+        
+        # Calculate buffer zones exactly as in Pinescript
+        df['up_trend_buffer'] = np.where(direction < 0, 
+                                        supertrend + dynamic_buffer,
+                                        np.nan)
+        df['down_trend_buffer'] = np.where(direction > 0,
+                                          supertrend - dynamic_buffer,
+                                          np.nan)
+        
+        # Generate signals using Pinescript logic
+        df['buy_signal'] = (
+            (df['direction'] < 0) &
+            (df['close'] >= df['supertrend']) & 
+            (df['close'] <= df['up_trend_buffer'])
+        )
+        
+        df['sell_signal'] = (
+            (df['direction'] > 0) & \
+            (df['close'] < df['supertrend']) &
+            (df['close'] >= df['down_trend_buffer'])
+        )
+        
+        print("\nDebug - Signal Statistics:")
+        print(f"Buy Signals: {df['buy_signal'].sum()} ({(df['buy_signal'].sum()/len(df))*100:.2f}%)")
+        print(f"Sell Signals: {df['sell_signal'].sum()} ({(df['sell_signal'].sum()/len(df))*100:.2f}%)")
+        
+        return df
+        
+    except Exception as e:
+        print(f"Error in CPU calculation: {str(e)}")
+        raise
 
-    tr = np.zeros(len(df))
-    atr = np.zeros(len(df))
-    for i in range(len(df)):
-        if i == 0:
-            tr[i] = high[i] - low[i]
-            atr[i] = tr[i]
-        else:
-            tr[i] = max(high[i] - low[i], abs(high[i] - close[i-1]), abs(low[i] - close[i-1]))
-            atr[i] = (atr[i-1] * (atr_length - 1) + tr[i]) / atr_length
-
-    dynamic_buffer = atr * buffer_multiplier
-    hl2 = (high + low) / 2
-    basic_upperband = hl2 + (factor * atr)
-    basic_lowerband = hl2 - (factor * atr)
-
-    final_upperband = np.zeros(len(df))
-    final_lowerband = np.zeros(len(df))
-    supertrend = np.zeros(len(df))
-    direction = np.zeros(len(df))
-
-    for i in range(1, len(df)):
-        if basic_upperband[i] < final_upperband[i-1] or close[i-1] > final_upperband[i-1]:
-            final_upperband[i] = basic_upperband[i]
-        else:
-            final_upperband[i] = final_upperband[i-1]
-        if basic_lowerband[i] > final_lowerband[i-1] or close[i-1] < final_lowerband[i-1]:
-            final_lowerband[i] = basic_lowerband[i]
-        else:
-            final_lowerband[i] = final_lowerband[i-1]
-        if close[i] > final_upperband[i-1]:
-            direction[i] = -1  # Uptrend
-            supertrend[i] = final_lowerband[i]
-        elif close[i] < final_lowerband[i-1]:
-            direction[i] = 1   # Downtrend
-            supertrend[i] = final_upperband[i]
-        else:
-            direction[i] = direction[i-1]
-            supertrend[i] = supertrend[i-1]
-
-    df['supertrend'] = supertrend
-    df['direction'] = direction
-    df['up_trend_buffer'] = np.where(direction < 0, supertrend + dynamic_buffer, np.nan)
-    df['down_trend_buffer'] = np.where(direction > 0, supertrend - dynamic_buffer, np.nan)
-
-    # Entry signals: matches your requirements exactly
-    df['buy_signal'] = (
-        (df['direction'] < 0) &
-        (df['close'] > df['supertrend']) &
-        (df['close'] <= df['up_trend_buffer'])
-    )
-    df['sell_signal'] = (
-        (df['direction'] > 0) &
-        (df['close'] < df['supertrend']) &
-        (df['close'] >= df['down_trend_buffer'])
-    )
-    return df
 
 
 @cuda.jit
@@ -583,21 +615,23 @@ def calculate_supertrend_cuda_kernel(high, low, close, atr_length, factor, buffe
 
 
 def calculate_supertrend_gpu(df, atr_length, factor, buffer_multiplier):
-    """
-    GPU-accelerated SuperTrend calculation matching Pinescript and your entry logic
-    """
+    """GPU-accelerated SuperTrend calculation matching Pinescript"""
     df = df.copy()
     n = len(df)
+
+    # Prepare input arrays
     high = cuda.to_device(df['high'].values.astype(np.float64))
     low = cuda.to_device(df['low'].values.astype(np.float64))
     close = cuda.to_device(df['close'].values.astype(np.float64))
 
+    # Create output arrays
     supertrend = cuda.device_array(n, dtype=np.float64)
     direction = cuda.device_array(n, dtype=np.float64)
     up_trend_buffer = cuda.device_array(n, dtype=np.float64)
     down_trend_buffer = cuda.device_array(n, dtype=np.float64)
 
-    threads_per_block = 256
+    # Configure and launch kernel
+    threads_per_block = THREADS_PER_BLOCK
     blocks_per_grid = (n + threads_per_block - 1) // threads_per_block
 
     calculate_supertrend_cuda_kernel[blocks_per_grid, threads_per_block](
@@ -605,44 +639,112 @@ def calculate_supertrend_gpu(df, atr_length, factor, buffer_multiplier):
         supertrend, direction, up_trend_buffer, down_trend_buffer
     )
 
+    # Copy results back to host
     df['supertrend'] = supertrend.copy_to_host()
     df['direction'] = direction.copy_to_host()
     df['up_trend_buffer'] = up_trend_buffer.copy_to_host()
     df['down_trend_buffer'] = down_trend_buffer.copy_to_host()
 
-    # Entry signals: matches your requirements exactly
+    # Generate signals using Pinescript logic
     df['buy_signal'] = (
         (df['direction'] < 0) &
-        (df['close'] > df['supertrend']) &
+        (df['close'] >= df['supertrend']) & 
         (df['close'] <= df['up_trend_buffer'])
     )
+        
     df['sell_signal'] = (
-        (df['direction'] > 0) &
+        (df['direction'] > 0) & \
         (df['close'] < df['supertrend']) &
         (df['close'] >= df['down_trend_buffer'])
     )
+        
     return df
-
 
 
 def calculate_supertrend(df, atr_length, factor, buffer_multiplier):
     """
-    Wrapper function for Supertrend calculation (CPU or GPU), with correct entry signals
+    Wrapper function that chooses between CPU or GPU implementation with enhanced debugging
     """
-    if cuda.is_available():
-        try:
-            ctx = cuda.current_context()
-            free_mem = ctx.get_memory_info().free
-            data_size = len(df) * 8 * 5
-            if free_mem > data_size * 3:
-                result_df = calculate_supertrend_gpu(df, atr_length, factor, buffer_multiplier)
-            else:
+    print(f"\nDebug - Starting SuperTrend calculation:")
+    print(f"Parameters: ATR={atr_length}, Factor={factor}, Buffer={buffer_multiplier}")
+    print(f"Input DataFrame shape: {df.shape}")
+    
+    try:
+        if cuda.is_available():
+            try:
+                ctx = cuda.current_context()
+                free_mem = ctx.get_memory_info().free
+
+                data_size = len(df) * 8 * 5  # Approximate size in bytes
+                print(f"Debug - GPU Memory Check:")
+                print(f"Required memory: {data_size / (1024*1024):.2f} MB")
+                print(f"Available GPU memory: {free_mem / (1024*1024):.2f} MB")
+                
+                if free_mem < 1024*1024*100:  # Minimum 100MB required
+                    print("Insufficient GPU memory, using CPU")
+                    return calculate_supertrend_cpu(df, atr_length, factor, buffer_multiplier)
+                
+                if free_mem > data_size * 3:
+                    print("Using GPU acceleration")
+                    result_df = calculate_supertrend_gpu(df, atr_length, factor, buffer_multiplier)
+                else:
+                    print("Insufficient GPU memory, using CPU")
+                    result_df = calculate_supertrend_cpu(df, atr_length, factor, buffer_multiplier)
+            except Exception as e:
+                print(f"GPU initialization failed: {str(e)}")
+                print("Falling back to CPU implementation")
                 result_df = calculate_supertrend_cpu(df, atr_length, factor, buffer_multiplier)
-        except Exception:
+        else:
+            print("No GPU available, using CPU implementation")
             result_df = calculate_supertrend_cpu(df, atr_length, factor, buffer_multiplier)
-    else:
-        result_df = calculate_supertrend_cpu(df, atr_length, factor, buffer_multiplier)
-    return result_df
+
+        # Verify calculations
+        print("\nDebug - Verification of calculations:")
+        print(f"SuperTrend values generated: {all(col in result_df.columns for col in ['supertrend', 'direction'])}")
+        print(f"Trend values present: {result_df['direction'].nunique()} unique trends")
+        print(f"Buffer zones calculated: {all(col in result_df.columns for col in ['up_trend_buffer', 'down_trend_buffer'])}")
+        
+        # Signal generation check
+        buy_signals = result_df['buy_signal'].sum()
+        sell_signals = result_df['sell_signal'].sum()
+        
+        print("\nDebug - Signal Generation:")
+        print(f"Buy signals: {buy_signals}")
+        print(f"Sell signals: {sell_signals}")
+        
+        if buy_signals == 0 and sell_signals == 0:
+            print("\nWarning: No entry signals generated!")
+            print("Parameters may be too restrictive")
+        
+        # Basic signal validation
+        signal_validation = {
+            'has_entries': buy_signals > 0 or sell_signals > 0,
+            'reasonable_signal_ratio': 0.0001 <= (buy_signals + sell_signals) / len(df) <= 0.1
+        }
+        
+        print("\nDebug - Signal Validation:")
+        for check, passed in signal_validation.items():
+            print(f"{check}: {'Passed' if passed else 'Failed'}")
+        
+        # Final verification
+        required_columns = ['open', 'high', 'low', 'close', 'supertrend', 'direction',
+                          'up_trend_buffer', 'down_trend_buffer', 'buy_signal', 'sell_signal']
+        
+        missing_columns = [col for col in required_columns if col not in result_df.columns]
+        if missing_columns:
+            print(f"\nWarning: Missing columns: {missing_columns}")
+            raise ValueError(f"Missing required columns: {missing_columns}")
+            
+        print("\nDebug - SuperTrend calculation completed successfully")
+        return result_df
+
+    except Exception as e:
+        error_msg = f"Error in SuperTrend calculation: {str(e)}\n{traceback.format_exc()}"
+        print(f"\nDebug - Error in calculate_supertrend:")
+        print(error_msg)
+        logging.getLogger('processing_errors').error(error_msg)
+        raise
+
 
 
 def cleanup_gpu_memory():
@@ -828,6 +930,7 @@ def backtest_supertrend(df, atr_length, factor, buffer_multiplier, hard_stop_dis
     hard_stop_distance : float
         Fixed Hard Stop Distance (points)
     """
+    
     try:
         # Calculate Supertrend and signals
         st_df = calculate_supertrend(df, atr_length, factor, buffer_multiplier)
@@ -994,13 +1097,13 @@ def backtest_supertrend(df, atr_length, factor, buffer_multiplier, hard_stop_dis
             # Check for new entries using updated Pinescript logic
             if not in_long and not in_short:
                 # Long entry condition
-                if st_df['buy_signal'].iloc[i]:
+                if st_df['buy_signal'].iloc[i] and st_df['direction'].iloc[i] < 0:
                     trade_number += 1
                     in_long = True
                     entry_price = current_price
                     entry_time = current_time
                 # Short entry condition
-                elif st_df['sell_signal'].iloc[i]:
+                elif st_df['sell_signal'].iloc[i] and st_df['direction'].iloc[i] > 0:
                     trade_number += 1
                     in_short = True
                     entry_price = current_price
@@ -1069,27 +1172,53 @@ def backtest_supertrend(df, atr_length, factor, buffer_multiplier, hard_stop_dis
         return None
 
 
-def rank_parameter_combinations(self, final_results_df, drawdown_threshold=0.30, profit_threshold=0.10):
-    """Rank parameter combinations based on multiple metrics"""
-    try:
-        # Ensure required columns exist
-        required_columns = ['max_drawdown', 'total_profit', 'sharpe_ratio', 'profit_factor', 'win_rate']
-        missing_columns = [col for col in required_columns if col not in final_results_df.columns]
-        
-        if missing_columns:
-            print(f"Warning: Missing columns: {missing_columns}")
-            # Add missing columns with default values
-            for col in missing_columns:
-                final_results_df[col] = 0.0
 
-        # Filter by drawdown and profit thresholds
-        filtered_df = final_results_df[
-            (final_results_df['max_drawdown'] <= drawdown_threshold) &
-            (final_results_df['total_profit'] >= profit_threshold)
-        ].copy()
+def rank_parameter_combinations(self, final_results_df, filters):
+    """Rank parameter combinations based on multiple metrics with optional filtering"""
+    try:
+        # DEBUG: Print columns to verify what's available
+        print("\nDEBUG - Available columns in results dataframe:")
+        print(list(final_results_df.columns))
+        
+        # Start with the full dataset
+        filtered_df = final_results_df.copy()
+        
+        # SAFE CHECK: Add any missing columns with default values
+        for col in ['avg_trade_duration', 'profit_factor', 'sharpe_ratio', 'win_rate', 'max_drawdown']:
+            if col not in filtered_df.columns:
+                print(f"Warning: '{col}' not found in results. Adding with default value.")
+                filtered_df[col] = 0.0
+        
+        # Apply filters based on preferences
+        if filters.get('use_drawdown', False) and filters.get('max_drawdown') is not None:
+            filtered_df = filtered_df[
+                filtered_df['max_drawdown'] <= filters['max_drawdown']
+            ]
+            print(f"Applied drawdown filter: {filters['max_drawdown']:.2%}")
+        
+        if filters.get('use_profit', False) and filters.get('min_profit') is not None:
+            filtered_df = filtered_df[
+                filtered_df['total_profit'] >= filters['min_profit']
+            ]
+            print(f"Applied profit filter: {filters['min_profit']:.2%}")
 
         if filtered_df.empty:
             print("\nNo parameter combinations meet the filtering criteria.")
+            print("Consider adjusting the filtering thresholds or running without filters.")
+            return pd.DataFrame()
+        
+        # Apply minimum trade count filter (if configured)
+        min_trades = 30  # Default value
+        if filters.get('use_min_trades', True) and filters.get('min_trades') is not None:
+            min_trades = filters['min_trades']
+        
+        print(f"Combinations before trade filter: {len(filtered_df)}")
+        filtered_df = filtered_df[filtered_df['trade_count'] >= min_trades]
+        print(f"Combinations after trade filter: {len(filtered_df)}")
+
+        if filtered_df.empty:
+            print(f"\nNo parameter combinations meet the minimum trade count of {min_trades}.")
+            print("Consider relaxing filter criteria or expanding parameter ranges.")
             return pd.DataFrame()
 
         # Calculate composite score
@@ -1118,11 +1247,22 @@ def rank_parameter_combinations(self, final_results_df, drawdown_threshold=0.30,
 
         # Create detailed summary
         summary_data = {
-            'analysis_timestamp': CURRENT_UTC,
-            'analyzed_by': CURRENT_USER,
+            'analysis_timestamp': self.current_utc,
+            'analyzed_by': self.user,
             'filtering_criteria': {
-                'max_drawdown_threshold': drawdown_threshold,
-                'min_profit_threshold': profit_threshold
+                'filters_used': bool(filters.get('use_drawdown', False) or filters.get('use_profit', False) or filters.get('use_min_trades', True)),
+                'drawdown_filter': {
+                    'used': filters.get('use_drawdown', False),
+                    'threshold': filters.get('max_drawdown')
+                },
+                'profit_filter': {
+                    'used': filters.get('use_profit', False),
+                    'threshold': filters.get('min_profit')
+                },
+                'min_trades_filter': {
+                    'used': filters.get('use_min_trades', True),
+                    'threshold': min_trades
+                }
             },
             'total_combinations_analyzed': len(final_results_df),
             'combinations_after_filtering': len(filtered_df),
@@ -1130,38 +1270,46 @@ def rank_parameter_combinations(self, final_results_df, drawdown_threshold=0.30,
         }
 
         print("\nTop 5 Parameter Combinations:")
-        for idx, row in top_5.iterrows():
+        for idx, (_, row) in enumerate(top_5.iterrows(), 1):
+            # Use .get() with defaults to handle missing fields safely
             combo_data = {
-                'rank': idx + 1,
+                'rank': idx,
                 'parameters': {
-                    'atr_length': int(row['atr_length']),
-                    'factor': float(row['factor']),
-                    'buffer_multiplier': float(row['buffer_multiplier']),
-                    'hard_stop_distance': float(row['hard_stop_distance'])
+                    'atr_length': int(row.get('atr_length', 0)),
+                    'factor': float(row.get('factor', 0.0)),
+                    'buffer_multiplier': float(row.get('buffer_multiplier', 0.0)),
+                    'hard_stop_distance': float(row.get('hard_stop_distance', 0.0))
                 },
                 'metrics': {
-                    'profit_factor': float(row['profit_factor']),
-                    'sharpe_ratio': float(row['sharpe_ratio']),
-                    'win_rate': float(row['win_rate']),
-                    'max_drawdown': float(row['max_drawdown']),
-                    'total_profit': float(row['total_profit']),
-                    'expectancy': float(row.get('expectancy', 0)),
-                    'trade_count': int(row['trade_count']),
-                    'avg_trade_duration': float(row['avg_trade_duration'])
+                    'profit_factor': float(row.get('profit_factor', 0.0)),
+                    'sharpe_ratio': float(row.get('sharpe_ratio', 0.0)),
+                    'win_rate': float(row.get('win_rate', 0.0)),
+                    'max_drawdown': float(row.get('max_drawdown', 0.0)),
+                    'total_profit': float(row.get('total_profit', 0.0)),
+                    'expectancy': float(row.get('expectancy', 0.0)),
+                    'trade_count': int(row.get('trade_count', 0))
                 }
             }
-            summary_data['top_5_combinations'].append(combo_data)
             
-            print(f"\nRank {idx + 1}:")
-            print(f"Parameters: ATR={row['atr_length']}, Factor={row['factor']:.2f}, "
-                  f"Buffer={row['buffer_multiplier']:.2f}, Stop={row['hard_stop_distance']}")
-            print(f"Profit Factor: {row['profit_factor']:.2f}")
-            print(f"Sharpe Ratio: {row['sharpe_ratio']:.2f}")
-            print(f"Win Rate: {row['win_rate']:.2%}")
-            print(f"Max Drawdown: {row['max_drawdown']:.2%}")
-            print(f"Net Profit: {row['total_profit']:.2f}")
-            print(f"Total Trades: {row['trade_count']}")
-            print(f"Avg Duration: {row['avg_trade_duration']:.2f} hours")
+            # Only include avg_trade_duration if it exists
+            if 'avg_trade_duration' in row:
+                combo_data['metrics']['avg_trade_duration'] = float(row.get('avg_trade_duration', 0.0))
+                
+            summary_data['top_5_combinations'].append(combo_data)
+        
+            print(f"\nRank {idx}:")
+            print(f"Parameters: ATR={row.get('atr_length', 0)}, Factor={row.get('factor', 0.0):.2f}, "
+                  f"Buffer={row.get('buffer_multiplier', 0.0):.2f}, Stop={row.get('hard_stop_distance', 0.0)}")
+            print(f"Profit Factor: {row.get('profit_factor', 0.0):.2f}")
+            print(f"Sharpe Ratio: {row.get('sharpe_ratio', 0.0):.2f}")
+            print(f"Win Rate: {row.get('win_rate', 0.0):.2%}")
+            print(f"Max Drawdown: {row.get('max_drawdown', 0.0):.2%}")
+            print(f"Net Profit: {row.get('total_profit', 0.0):.2f}")
+            print(f"Total Trades: {int(row.get('trade_count', 0))}")
+            
+            # Only print avg_trade_duration if it exists
+            if 'avg_trade_duration' in row:
+                print(f"Avg Duration: {row.get('avg_trade_duration', 0.0):.2f} hours")
 
         # Save summary to JSON
         summary_file = os.path.join(detailed_results_dir, 'top_5_summary.json')
@@ -1173,6 +1321,7 @@ def rank_parameter_combinations(self, final_results_df, drawdown_threshold=0.30,
     except Exception as e:
         self.processing_logger.error(f"Error ranking parameter combinations: {str(e)}")
         print(f"\nError ranking parameter combinations: {str(e)}")
+        print(traceback.format_exc())
         return pd.DataFrame()
 
 
@@ -1221,7 +1370,6 @@ def process_param_combo(args):
         return None
 
 
-
 def cleanup_memory():
     """Performs memory cleanup operations"""
     try:
@@ -1249,7 +1397,7 @@ class BatchProcessor:
         self.current_batch = 0
         self.processing_logger = logging.getLogger('processing_errors')
         self.system_logger = logging.getLogger('system_errors')
-        self.current_utc = "2025-06-13 00:25:47"
+        self.current_utc = "2025-06-20 23:31:03"  # Updated timestamp
         self.user = "arullr001"
         self.total_combinations = 0
         self.processed_combinations = 0
@@ -1275,7 +1423,6 @@ class BatchProcessor:
         print(f"Debug - Created tracking file: {tracking_file}")
         with open(tracking_file, 'w') as f:
             json.dump(tracking_data, f, indent=4)
-
 
     def process_batch(self, df, param_combinations, batch_start, batch_size, max_workers=4):
         """Processes a batch of parameter combinations"""
@@ -1312,6 +1459,7 @@ class BatchProcessor:
                         result = future.result()
                         if result and result.get('trade_count', 0) > 0:
                             results.append(result)
+                            self.successful_combinations += 1
                             
                             # Update status display if available
                             if self.status_display:
@@ -1330,7 +1478,14 @@ class BatchProcessor:
                         self.processing_logger.error(error_msg)
                         pbar.update(1)
 
-        # Save batch results if HDD manager is available
+        # Save batch results to CSV explicitly - FIXED: Added explicit call to save_batch_results
+        if results:
+            print(f"\nDebug - Saving {len(results)} results from batch {self.current_batch}")
+            self.save_batch_results(results, self.current_batch)
+        else:
+            print(f"\nDebug - No valid results in batch {self.current_batch} to save")
+
+        # Save batch data to HDD manager if available
         if self.hdd_manager and results:
             batch_data = {
                 'results': results,
@@ -1339,6 +1494,9 @@ class BatchProcessor:
             }
             self.hdd_manager.save_batch_to_disk(batch_data, self.current_batch)
 
+        # Update progress tracking
+        self._update_progress()
+
         # Cleanup
         if self.hdd_manager:
             self.hdd_manager.cleanup_temp_files()
@@ -1346,7 +1504,6 @@ class BatchProcessor:
         
         self.current_batch += 1
         return results
-
 
     def _process_gpu_batch(self, df, combinations, gpu_id):
         """Process a batch on specific GPU"""
@@ -1373,7 +1530,6 @@ class BatchProcessor:
             self.processing_logger.error(f"Error in {gpu_name} GPU batch: {e}")
             return []
 
-
     def _update_progress(self):
         """Update progress tracking file"""
         try:
@@ -1394,10 +1550,11 @@ class BatchProcessor:
             print(f"Debug - Error updating progress: {str(e)}")
 
     def save_batch_results(self, results, batch_num):
-        """Saves batch results to CSV"""
+        """Saves batch results to CSV with enhanced debugging"""
         try:
-            print(f"\nDebug - Saving batch {batch_num} results")
+            print(f"\nDebug - Starting save_batch_results for batch {batch_num}")
             batch_file = os.path.join(self.dir_manager.csv_dumps_dir, f'batch_{batch_num}.csv')
+            print(f"Debug - Target file path: {batch_file}")
             
             results_data = []
             for r in results:
@@ -1411,6 +1568,8 @@ class BatchProcessor:
                         'trade_count': r['trade_count'],
                         'win_rate': r['win_rate'],
                         'profit_factor': r.get('profit_factor', 0),
+                        'sharpe_ratio': r.get('sharpe_ratio', 0), 
+                        'max_drawdown': r.get('max_drawdown', 0),
                         'risk_adjusted_return': r.get('risk_adjusted_return', 0)
                     }
                     results_data.append(row)
@@ -1418,7 +1577,14 @@ class BatchProcessor:
             if results_data:
                 df = pd.DataFrame(results_data)
                 df.to_csv(batch_file, index=False)
-                print(f"Saved {len(results_data)} results to {batch_file}")
+                print(f"Debug - Successfully saved {len(results_data)} results to {batch_file}")
+                
+                # Verify file was created
+                if os.path.exists(batch_file):
+                    file_size = os.path.getsize(batch_file)
+                    print(f"Debug - Verified file exists with size: {file_size} bytes")
+                else:
+                    print(f"Debug - ERROR: File was not created: {batch_file}")
                 
                 # Save metadata
                 metadata_file = os.path.join(
@@ -1436,11 +1602,11 @@ class BatchProcessor:
                 
                 with open(metadata_file, 'w') as f:
                     json.dump(metadata, f, indent=4)
-                print(f"Saved metadata to {metadata_file}")
+                print(f"Debug - Saved metadata to {metadata_file}")
                 
                 return True
                 
-            print("No valid results to save")
+            print("Debug - No valid results to save")
             return False
 
         except Exception as e:
@@ -1451,16 +1617,26 @@ class BatchProcessor:
             return False
 
     def merge_batch_results(self):
-        """Merges all batch results into final results"""
+        """Merges all batch results into final results with enhanced debugging"""
         print("\nDebug - Starting batch results merge")
         all_results = []
         batch_files = glob.glob(os.path.join(self.dir_manager.csv_dumps_dir, 'batch_*.csv'))
+        
+        print(f"Debug - Found {len(batch_files)} batch files")
+        if len(batch_files) == 0:
+            print(f"Debug - Looking in directory: {self.dir_manager.csv_dumps_dir}")
+            if os.path.exists(self.dir_manager.csv_dumps_dir):
+                all_files = os.listdir(self.dir_manager.csv_dumps_dir)
+                print(f"Debug - All files in directory: {all_files}")
+            else:
+                print(f"Debug - Directory does not exist: {self.dir_manager.csv_dumps_dir}")
         
         try:
             for file in batch_files:
                 try:
                     print(f"Processing batch file: {file}")
                     df = pd.read_csv(file)
+                    print(f"Debug - Loaded file with {len(df)} rows")
                     all_results.append(df)
                 except Exception as e:
                     error_msg = f"Error reading batch file {file}: {str(e)}"
@@ -1477,7 +1653,7 @@ class BatchProcessor:
                     'all_results.csv'
                 )
                 final_df.to_csv(final_results_file, index=False)
-                print(f"Saved merged results to {final_results_file}")
+                print(f"Debug - Saved merged results ({len(final_df)} rows) to {final_results_file}")
                 
                 final_metadata = {
                     'processed_at': self.current_utc,
@@ -1496,11 +1672,11 @@ class BatchProcessor:
                 )
                 with open(metadata_file, 'w') as f:
                     json.dump(final_metadata, f, indent=4)
-                print(f"Saved final metadata to {metadata_file}")
+                print(f"Debug - Saved final metadata to {metadata_file}")
                 
                 return final_df
             
-            print("No results to merge")
+            print("Debug - No results to merge")
             return pd.DataFrame()
 
         except Exception as e:
@@ -1509,7 +1685,6 @@ class BatchProcessor:
             print(error_msg)
             self.system_logger.error(error_msg)
             return pd.DataFrame()
-
 
 
 CURRENT_UTC = "2025-06-12 22:24:39"
@@ -1525,7 +1700,9 @@ class ResultsManager:
         self.current_utc = CURRENT_UTC
         self.user = CURRENT_USER
 
-    def rank_parameter_combinations(self, final_results_df, filters, top_n=5):
+
+
+    def rank_parameter_combinations(self, final_results_df, filters):
         """Rank parameter combinations based on multiple metrics with optional filtering"""
         try:
             # Start with the full dataset
@@ -1547,13 +1724,25 @@ class ResultsManager:
                 print("Consider adjusting the filtering thresholds or running without filters.")
                 return pd.DataFrame()
 
+
+            # Apply minimum trade count filter (30 trades is statistically significant)
+            min_trades = 30
+            print(f"Combinations before trade filter: {len(filtered_df)}")
+            filtered_df = filtered_df[filtered_df['trade_count'] >= min_trades]
+
+            if filtered_df.empty:
+                print(f"\nNo parameter combinations have {min_trades}+ trades.")
+                print("Consider relaxing filter criteria or expanding parameter ranges.")
+                return pd.DataFrame()
+        
+            print(f"Combinations after trade filter: {len(filtered_df)}")
+        
+        
             # Calculate composite score
-            filtered_df = filtered_df.assign(
-                composite_score=(
-                    filtered_df['profit_factor'] * 0.4 +
-                    filtered_df['sharpe_ratio'] * 0.3 +
-                    filtered_df['win_rate'] * 0.3
-                )
+            filtered_df['composite_score'] = (
+                filtered_df['profit_factor'] * 0.4 +    # 40% weight
+                filtered_df['sharpe_ratio'] * 0.3 +     # 30% weight
+                filtered_df['win_rate'] * 0.3           # 30% weight
             )
 
             # Sort by profit factor first, then use composite score for tie-breaking
@@ -1562,16 +1751,16 @@ class ResultsManager:
                 ascending=[False, False, False]
             )
 
-            # Get top N combinations
-            top_n_df = ranked_df.head(top_n)
+            # Get top 5 combinations
+            top_5 = ranked_df.head(5)
 
-            # Save detailed results for top N
-            detailed_results_dir = os.path.join(self.dir_manager.final_results_dir, f'top_{top_n}_combinations')
+            # Save detailed results for top 5
+            detailed_results_dir = os.path.join(self.dir_manager.final_results_dir, 'top_5_combinations')
             os.makedirs(detailed_results_dir, exist_ok=True)
 
             # Save results with all metrics
-            results_file = os.path.join(detailed_results_dir, f'top_{top_n}_ranked_results.csv')
-            top_n_df.to_csv(results_file, index=False)
+            results_file = os.path.join(detailed_results_dir, 'top_5_ranked_results.csv')
+            top_5.to_csv(results_file, index=False)
 
             # Create detailed summary
             summary_data = {
@@ -1590,54 +1779,57 @@ class ResultsManager:
                 },
                 'total_combinations_analyzed': len(final_results_df),
                 'combinations_after_filtering': len(filtered_df),
-                f'top_{top_n}_combinations': []
+                'top_5_combinations': []
             }
 
-            print(f"\nTop {top_n} Parameter Combinations:")
-            for rank, row in enumerate(top_n_df.itertuples(index=False), 1):
+            print("\nTop 5 Parameter Combinations:")
+            for idx, row in top_5.iterrows():
                 combo_data = {
-                    'rank': rank,
+                    'rank': idx + 1,
                     'parameters': {
-                        'atr_length': int(getattr(row, 'atr_length', 0)),
-                        'factor': float(getattr(row, 'factor', 0)),
-                        'buffer_multiplier': float(getattr(row, 'buffer_multiplier', 0)),
-                        'hard_stop_distance': float(getattr(row, 'hard_stop_distance', 0))
+                        'atr_length': int(row['atr_length']),
+                        'factor': float(row['factor']),
+                        'buffer_multiplier': float(row['buffer_multiplier']),
+                        'hard_stop_distance': float(row['hard_stop_distance'])
                     },
                     'metrics': {
-                        'profit_factor': float(getattr(row, 'profit_factor', 0)),
-                        'sharpe_ratio': float(getattr(row, 'sharpe_ratio', 0)),
-                        'win_rate': float(getattr(row, 'win_rate', 0)),
-                        'max_drawdown': float(getattr(row, 'max_drawdown', 0)),
-                        'total_profit': float(getattr(row, 'total_profit', 0)),
-                        'expectancy': float(getattr(row, 'expectancy', 0)),
-                        'trade_count': int(getattr(row, 'trade_count', 0)),
-                        'avg_trade_duration': float(getattr(row, 'avg_trade_duration', 0))
+                        'profit_factor': float(row['profit_factor']),
+                        'sharpe_ratio': float(row['sharpe_ratio']),
+                        'win_rate': float(row['win_rate']),
+                        'max_drawdown': float(row['max_drawdown']),
+                        'total_profit': float(row['total_profit']),
+                        'expectancy': float(row.get('expectancy', 0)),
+                        'trade_count': int(row['trade_count']),
+                        'avg_trade_duration': float(row['avg_trade_duration'])
                     }
                 }
-                summary_data[f'top_{top_n}_combinations'].append(combo_data)
+                summary_data['top_5_combinations'].append(combo_data)
             
-                print(f"\nRank {rank}:")
-                print(f"Parameters: ATR={getattr(row, 'atr_length', 0)}, Factor={getattr(row, 'factor', 0):.2f}, "
-                      f"Buffer={getattr(row, 'buffer_multiplier', 0):.2f}, Stop={getattr(row, 'hard_stop_distance', 0)}")
-                print(f"Profit Factor: {getattr(row, 'profit_factor', 0):.2f}")
-                print(f"Sharpe Ratio: {getattr(row, 'sharpe_ratio', 0):.2f}")
-                print(f"Win Rate: {getattr(row, 'win_rate', 0):.2%}")
-                print(f"Max Drawdown: {getattr(row, 'max_drawdown', 0):.2%}")
-                print(f"Net Profit: {getattr(row, 'total_profit', 0):.2f}")
-                print(f"Total Trades: {int(getattr(row, 'trade_count', 0))}")
-                print(f"Avg Duration: {getattr(row, 'avg_trade_duration', 0):.2f} hours")
+                print(f"\nRank {idx + 1}:")
+                print(f"Parameters: ATR={row['atr_length']}, Factor={row['factor']:.2f}, "
+                      f"Buffer={row['buffer_multiplier']:.2f}, Stop={row['hard_stop_distance']}")
+                print(f"Profit Factor: {row['profit_factor']:.2f}")
+                print(f"Sharpe Ratio: {row['sharpe_ratio']:.2f}")
+                print(f"Win Rate: {row['win_rate']:.2%}")
+                print(f"Max Drawdown: {row['max_drawdown']:.2%}")
+                print(f"Net Profit: {row['total_profit']:.2f}")
+                print(f"Total Trades: {row['trade_count']}")
+                print(f"Avg Duration: {row['avg_trade_duration']:.2f} hours")
 
             # Save summary to JSON
-            summary_file = os.path.join(detailed_results_dir, f'top_{top_n}_summary.json')
+            summary_file = os.path.join(detailed_results_dir, 'top_5_summary.json')
             with open(summary_file, 'w') as f:
                 json.dump(summary_data, f, indent=4)
 
-            return top_n_df
+            return top_5
 
         except Exception as e:
             self.processing_logger.error(f"Error ranking parameter combinations: {str(e)}")
             print(f"\nError ranking parameter combinations: {str(e)}")
             return pd.DataFrame()
+    
+
+
 
     def create_performance_summary(self, final_results_df):
         """Creates and saves a performance summary of the results"""
@@ -1646,17 +1838,13 @@ class ResultsManager:
                 print("\nNo results to summarize.")
                 return
 
-            # Use idxmax to get correct best performance row
-            idx = final_results_df['total_profit'].idxmax()
-            best_row = final_results_df.loc[idx]
-
             summary = {
                 'timestamp': self.current_utc,
                 'generated_by': self.user,
                 'total_combinations_tested': len(final_results_df),
                 'best_performance': {
                     'total_profit': float(final_results_df['total_profit'].max()),
-                    'parameters': best_row.to_dict(),
+                    'parameters': final_results_df.iloc[0].to_dict(),
                 },
                 'average_performance': {
                     'profit': float(final_results_df['total_profit'].mean()),
@@ -1689,6 +1877,7 @@ class ResultsManager:
         except Exception as e:
             self.processing_logger.error(f"Error creating performance summary: {str(e)}")
             print(f"\nError creating performance summary: {str(e)}")
+
 
 
 def create_performance_visualizations(self, df):
