@@ -1986,18 +1986,18 @@ class ResultsManager:
                 # Parameter Ranges
                 f.write("PARAMETER RANGES TESTED:\n")
                 f.write("-"*70 + "\n")
-                f.write(f"ATR Length: {min(params['atr_lengths'])} to {max(params['atr_lengths'])}")
-                f.write(f" (step {params['atr_lengths'][1]-params['atr_lengths'][0] if len(params['atr_lengths'])>1 else 0})\n")
-            
-                f.write(f"Factor: {min(params['factors']):.2f} to {max(params['factors']):.2f}")
-                f.write(f" (step {params['factors'][1]-params['factors'][0]:.2f} if len(params['factors'])>1 else 0})\n")
-            
-                f.write(f"Buffer Multiplier: {min(params['buffers']):.2f} to {max(params['buffers']):.2f}")
-                f.write(f" (step {params['buffers'][1]-params['buffers'][0]:.2f} if len(params['buffers'])>1 else 0})\n")
-            
-                f.write(f"Hard Stop Distance: {min(params['stops'])} to {max(params['stops'])}")
-                f.write(f" (step {params['stops'][1]-params['stops'][0] if len(params['stops'])>1 else 0})\n")
-            
+                step_atr = params['atr_lengths'][1]-params['atr_lengths'][0] if len(params['atr_lengths'])>1 else 0
+                f.write(f"ATR Length: {min(params['atr_lengths'])} to {max(params['atr_lengths'])} (step {step_atr})\n")
+        
+                step_factor = params['factors'][1]-params['factors'][0] if len(params['factors'])>1 else 0
+                f.write(f"Factor: {min(params['factors']):.2f} to {max(params['factors']):.2f} (step {step_factor:.2f})\n")
+        
+                step_buffer = params['buffers'][1]-params['buffers'][0] if len(params['buffers'])>1 else 0
+                f.write(f"Buffer Multiplier: {min(params['buffers']):.2f} to {max(params['buffers']):.2f} (step {step_buffer:.2f})\n")
+        
+                step_stop = params['stops'][1]-params['stops'][0] if len(params['stops'])>1 else 0
+                f.write(f"Hard Stop Distance: {min(params['stops'])} to {max(params['stops'])} (step {step_stop})\n")
+        
                 f.write(f"Total Combinations Tested: {params['total_combinations']:,}\n\n")
             
                 # Filtering Settings
