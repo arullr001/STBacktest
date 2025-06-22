@@ -1571,7 +1571,8 @@ class BatchProcessor:
                         'profit_factor': r.get('profit_factor', 0),
                         'sharpe_ratio': r.get('sharpe_ratio', 0), 
                         'max_drawdown': r.get('max_drawdown', 0),
-                        'risk_adjusted_return': r.get('risk_adjusted_return', 0)
+                        'risk_adjusted_return': r.get('risk_adjusted_return', 0),
+                        'avg_trade_duration': r.get('avg_trade_duration', 0)
                     }
                     results_data.append(row)
 
