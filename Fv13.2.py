@@ -1403,13 +1403,16 @@ def process_param_combo(args):
         print(f"Data shape: {df.shape}")
         print(f"Date range: {df.index.min()} to {df.index.max()}")
         
-        result = backtest_supertrend(
-            df, 
-            atr_length=atr_length,
-            factor=factor,
-            buffer_multiplier=buffer_multiplier,
-            hard_stop_distance=hard_stop_distance
-        )
+        # Create parameters dictionary instead of passing as kwargs
+        parameters = {
+            'atr_length': atr_length,
+            'factor': factor,
+            'buffer_multiplier': buffer_multiplier,
+            'hard_stop_distance': hard_stop_distance
+        }
+        
+        # Call with dictionary of parameters
+        result = backtest_supertrend(df, parameters)
         
         if result:
             print("\nDebug - Result metrics:")
@@ -1434,6 +1437,7 @@ def process_param_combo(args):
         print(error_msg)
         logging.getLogger('processing_errors').error(error_msg)
         return None
+
 
 
 def cleanup_memory():
