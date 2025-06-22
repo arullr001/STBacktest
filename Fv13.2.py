@@ -719,7 +719,7 @@ def calculate_supertrend(df, atr_length, factor, buffer_multiplier):
         # Basic signal validation
         signal_validation = {
             'has_entries': buy_signals > 0 or sell_signals > 0,
-            'reasonable_signal_ratio': 0.0001 <= (buy_signals + sell_signals) / len(df) <= 0.1
+            'reasonable_signal_ratio': 0.0001 <= (buy_signals + sell_signals) / len(df) <= 0.25
         }
         
         print("\nDebug - Signal Validation:")
@@ -772,8 +772,10 @@ class StatusDisplay:
                 self.filters = {
                     'use_drawdown': False,
                     'use_profit': False,
+                    'use_min_trades': False,
                     'max_drawdown': None,
-                    'min_profit': None
+                    'min_profit': None,
+                    'min_trades': None
                 }
             else:
                 print("Debug: Using provided filters")  # Debug output
@@ -818,7 +820,7 @@ class StatusDisplay:
             # Box top
             print("=" * 70)
             print("║" + " SUPERTREND BACKTESTER STATUS ".center(68) + "║")
-            print("║" + f" 2025-06-14 17:09:33 UTC ".center(68) + "║")
+            print("║" + f" {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')} ".center(68) + "║")
             print("=" * 70)
 
             # Parameter ranges
@@ -834,17 +836,24 @@ class StatusDisplay:
 
             # Filtering information
             print("║ Filtering Settings:".ljust(69) + "║")
-            # Safely access filter settings
+            
+            # Check for any applied filters
             use_drawdown = self.filters.get('use_drawdown', False)
             use_profit = self.filters.get('use_profit', False)
+            use_min_trades = self.filters.get('use_min_trades', True)  # Default to True
             
-            if use_drawdown or use_profit:
-                if use_drawdown:
+            has_filters = use_drawdown or use_profit or use_min_trades
+            
+            if has_filters:
+                if use_drawdown and self.filters.get('max_drawdown') is not None:
                     max_dd = self.filters.get('max_drawdown', 0)
                     print(f"║ Max Drawdown: {max_dd:.1%}".ljust(69) + "║")
-                if use_profit:
+                if use_profit and self.filters.get('min_profit') is not None:
                     min_profit = self.filters.get('min_profit', 0)
                     print(f"║ Min Profit: {min_profit:.1%}".ljust(69) + "║")
+                if use_min_trades and self.filters.get('min_trades') is not None:
+                    min_trades = self.filters.get('min_trades', 30)
+                    print(f"║ Min Trades: {min_trades}".ljust(69) + "║")
             else:
                 print("║ No filters applied".ljust(69) + "║")
             print("=" * 70)
@@ -895,282 +904,338 @@ class StatusDisplay:
         self._draw_box()
 
     def _update_top_combinations(self, combo):
-        new_combo = {
-            'atr': combo['parameters']['atr_length'],
-            'factor': combo['parameters']['factor'],
-            'buffer': combo['parameters']['buffer_multiplier'],
-            'stop': combo['parameters']['hard_stop_distance'],
-            'pf': combo.get('profit_factor', 0),
-            'wr': combo.get('win_rate', 0),
-            'trades': combo.get('trade_count', 0)
-        }
+        # Check if this combo meets the minimum trade filter
+        trade_count = combo.get('trade_count', 0)
+        min_trades = self.filters.get('min_trades', 0) if self.filters.get('use_min_trades', False) else 0
         
-        self.top_combinations.append(new_combo)
-        self.top_combinations.sort(key=lambda x: x['pf'], reverse=True)
-        self.top_combinations = self.top_combinations[:3]
+        # Only add combinations that meet any minimum trade filter
+        if trade_count >= min_trades:
+            new_combo = {
+                'atr': combo['parameters']['atr_length'],
+                'factor': combo['parameters']['factor'],
+                'buffer': combo['parameters']['buffer_multiplier'],
+                'stop': combo['parameters']['hard_stop_distance'],
+                'pf': combo.get('profit_factor', 0),
+                'wr': combo.get('win_rate', 0),
+                'trades': trade_count
+            }
+            
+            # Add to list and maintain sort by profit factor
+            self.top_combinations.append(new_combo)
+            self.top_combinations.sort(key=lambda x: x['pf'], reverse=True)
+            self.top_combinations = self.top_combinations[:3]
 
     def cleanup(self):
         self.running = False
         print("\n" * 20)  # Move cursor below status box
 
-def backtest_supertrend(df, atr_length, factor, buffer_multiplier, hard_stop_distance):
+
+def backtest_supertrend(df, parameters):
     """
-    Optimized backtesting of the Supertrend strategy matching Pinescript logic with enhanced metrics
+    Backtest SuperTrend strategy with specified parameters
     
-    Parameters:
-    -----------
-    df : pandas.DataFrame
-        DataFrame with OHLC data
-    atr_length : int
-        Length of ATR period
-    factor : float
-        SuperTrend factor multiplier
-    buffer_multiplier : float
-        Buffer zone multiplier
-    hard_stop_distance : float
-        Fixed Hard Stop Distance (points)
+    Args:
+        df: DataFrame with OHLCV data
+        parameters: Dict with strategy parameters
+    
+    Returns:
+        Dict with backtest results
     """
+    # Extract parameters
+    atr_length = parameters['atr_length']
+    factor = parameters['factor']
+    buffer_multiplier = parameters['buffer_multiplier'] 
+    hard_stop_distance = parameters['hard_stop_distance']
     
-    try:
-        # Calculate Supertrend and signals
-        st_df = calculate_supertrend(df, atr_length, factor, buffer_multiplier)
+    # Calculate SuperTrend
+    df_tmp = df.copy()
+    df_tmp = calculate_supertrend(df_tmp, atr_length, factor, buffer_multiplier)
+    
+    # Prepare for backtesting
+    dates = df_tmp.index.values
+    opens = df_tmp['open'].values
+    highs = df_tmp['high'].values
+    lows = df_tmp['low'].values
+    closes = df_tmp['close'].values
+    volumes = df_tmp['volume'].values
+    trends = df_tmp['trend'].values
+    
+    # Track trades
+    trades = []
+    trade_number = 0
+    
+    # Position tracking
+    in_long = False
+    in_short = False
+    entry_price = 0
+    entry_time = None
+    high_since_entry = 0
+    low_since_entry = float('inf')
+    
+    # Trading loop
+    for i in range(1, len(df_tmp)):
+        current_time = dates[i]
+        current_price = closes[i]
+        previous_trend = trends[i-1]
+        current_trend = trends[i]
         
-        # Calculate hard stop lines based on trend direction as in Pinescript
-        st_df['up_trend_hard_stop'] = np.where(st_df['direction'] < 0,
-                                              st_df['supertrend'] - hard_stop_distance,
-                                              np.nan)
-        st_df['down_trend_hard_stop'] = np.where(st_df['direction'] > 0,
-                                                st_df['supertrend'] + hard_stop_distance,
-                                                np.nan)
+        # Check for long exit
+        if in_long:
+            exit_condition = False
+            exit_price = current_price
+            exit_type = "trend_flip"
+            
+            # Update tracking values
+            high_since_entry = max(high_since_entry, highs[i])
+            
+            # Check for time-based exit (after 2 days)
+            entry_datetime = pd.to_datetime(entry_time)
+            current_datetime = pd.to_datetime(current_time)
+            days_in_trade = (current_datetime - entry_datetime).total_seconds() / (24 * 60 * 60)
+            
+            if days_in_trade >= 2:
+                exit_condition = True
+                exit_type = "time_based_exit"
+                
+            # Check other exit conditions
+            elif current_trend < 0 and previous_trend > 0:
+                # Trend flipped to bearish - exit long
+                exit_condition = True
+                exit_type = "trend_flip"
+                
+            elif (entry_price - current_price) >= hard_stop_distance:
+                # Hard stop loss hit
+                exit_condition = True
+                exit_price = entry_price - hard_stop_distance
+                exit_type = "stop_loss"
+                
+            # Process exit if needed
+            if exit_condition:
+                points = exit_price - entry_price
+                pnl_pct = points / entry_price
+                
+                # Calculate duration using candle count
+                entry_idx = np.where(dates == entry_time)[0][0]
+                exit_idx = i
+                candle_count = exit_idx - entry_idx
+                
+                # Each candle is 5 minutes (assuming 5-min chart)
+                trade_duration = candle_count * (5/60)  # Convert to hours
+                
+                trades.append({
+                    'trade_number': trade_number,
+                    'direction': 'long',
+                    'entry_time': entry_time,
+                    'entry_price': entry_price,
+                    'exit_time': current_time, 
+                    'exit_price': exit_price,
+                    'exit_type': exit_type,  # Now includes "time_based_exit"
+                    'points': points,
+                    'pnl_percent': pnl_pct,
+                    'duration': trade_duration,
+                    'candle_count': candle_count  # Added candle count
+                })
+                
+                in_long = False
+                high_since_entry = 0
+                
+        # Check for short exit
+        elif in_short:
+            exit_condition = False
+            exit_price = current_price
+            exit_type = "trend_flip"
+            
+            # Update tracking values
+            low_since_entry = min(low_since_entry, lows[i])
+            
+            # Check for time-based exit (after 2 days)
+            entry_datetime = pd.to_datetime(entry_time)
+            current_datetime = pd.to_datetime(current_time)
+            days_in_trade = (current_datetime - entry_datetime).total_seconds() / (24 * 60 * 60)
+            
+            if days_in_trade >= 2:
+                exit_condition = True
+                exit_type = "time_based_exit"
+                
+            # Check other exit conditions
+            elif current_trend > 0 and previous_trend < 0:
+                # Trend flipped to bullish - exit short
+                exit_condition = True
+                exit_type = "trend_flip"
+                
+            elif (current_price - entry_price) >= hard_stop_distance:
+                # Hard stop loss hit
+                exit_condition = True
+                exit_price = entry_price + hard_stop_distance
+                exit_type = "stop_loss"
+                
+            # Process exit if needed
+            if exit_condition:
+                points = entry_price - exit_price
+                pnl_pct = points / entry_price
+                
+                # Calculate duration using candle count
+                entry_idx = np.where(dates == entry_time)[0][0]
+                exit_idx = i
+                candle_count = exit_idx - entry_idx
+                
+                # Each candle is 5 minutes (assuming 5-min chart)
+                trade_duration = candle_count * (5/60)  # Convert to hours
+                
+                trades.append({
+                    'trade_number': trade_number,
+                    'direction': 'short',
+                    'entry_time': entry_time,
+                    'entry_price': entry_price,
+                    'exit_time': current_time,
+                    'exit_price': exit_price,
+                    'exit_type': exit_type,  # Now includes "time_based_exit"
+                    'points': points,
+                    'pnl_percent': pnl_pct,
+                    'duration': trade_duration,
+                    'candle_count': candle_count  # Added candle count
+                })
+                
+                in_short = False
+                low_since_entry = float('inf')
         
-        # Initialize metrics tracking
-        trades = []
-        trade_number = 0
-        in_long = False
-        in_short = False
-        entry_price = 0
-        entry_time = None
+        # Check for entries (only if not in a position)
+        if not in_long and not in_short:
+            # Bull trend, consider long entry
+            if current_trend > 0 and previous_trend <= 0:
+                trade_number += 1
+                entry_price = current_price
+                entry_time = current_time
+                high_since_entry = highs[i]
+                in_long = True
+                
+            # Bear trend, consider short entry  
+            elif current_trend < 0 and previous_trend >= 0:
+                trade_number += 1
+                entry_price = current_price
+                entry_time = current_time
+                low_since_entry = lows[i]
+                in_short = True
+    
+    # Close any open position at the end
+    if in_long:
+        points = closes[-1] - entry_price
+        pnl_pct = points / entry_price
         
-        # Performance tracking
-        consecutive_wins = 0
-        current_streak = 0
-        max_consecutive_wins = 0
-        max_consecutive_losses = 0
-        gross_profit = 0
-        gross_loss = 0
-        winning_trades = 0
-        losing_trades = 0
+        entry_idx = np.where(dates == entry_time)[0][0]
+        exit_idx = len(df_tmp) - 1
+        candle_count = exit_idx - entry_idx
+        trade_duration = candle_count * (5/60)  # Convert to hours
         
-        # Drawdown tracking
-        running_pnl = []
+        trades.append({
+            'trade_number': trade_number,
+            'direction': 'long',
+            'entry_time': entry_time,
+            'entry_price': entry_price,
+            'exit_time': dates[-1],
+            'exit_price': closes[-1],
+            'exit_type': 'end_of_data',
+            'points': points,
+            'pnl_percent': pnl_pct,
+            'duration': trade_duration,
+            'candle_count': candle_count
+        })
+        
+    elif in_short:
+        points = entry_price - closes[-1]
+        pnl_pct = points / entry_price
+        
+        entry_idx = np.where(dates == entry_time)[0][0]
+        exit_idx = len(df_tmp) - 1
+        candle_count = exit_idx - entry_idx
+        trade_duration = candle_count * (5/60)  # Convert to hours
+        
+        trades.append({
+            'trade_number': trade_number,
+            'direction': 'short',
+            'entry_time': entry_time,
+            'entry_price': entry_price,
+            'exit_time': dates[-1],
+            'exit_price': closes[-1],
+            'exit_type': 'end_of_data',
+            'points': points,
+            'pnl_percent': pnl_pct,
+            'duration': trade_duration,
+            'candle_count': candle_count
+        })
+    
+    # Calculate backtest statistics
+    trade_count = len(trades)
+    if trade_count > 0:
+        win_count = sum(1 for t in trades if t['points'] > 0)
+        loss_count = sum(1 for t in trades if t['points'] <= 0)
+        win_rate = win_count / trade_count if trade_count > 0 else 0
+        
+        gross_profit = sum(t['points'] for t in trades if t['points'] > 0)
+        gross_loss = sum(t['points'] for t in trades if t['points'] <= 0)
+        profit_factor = abs(gross_profit / gross_loss) if gross_loss != 0 else float('inf')
+        
+        avg_profit = gross_profit / win_count if win_count > 0 else 0
+        avg_loss = gross_loss / loss_count if loss_count > 0 else 0
+        
+        avg_trade_duration = sum(t['duration'] for t in trades) / trade_count
+        avg_candle_count = sum(t['candle_count'] for t in trades) / trade_count
+        
+        # Calculate drawdown
         equity_curve = [0]
-        max_equity = 0
+        for trade in trades:
+            equity_curve.append(equity_curve[-1] + trade['points'])
+        
+        peak = 0
+        drawdown = 0
         max_drawdown = 0
         
-        # Convert to numpy arrays for faster operations
-        close = st_df['close'].values
-        high = st_df['high'].values
-        low = st_df['low'].values
-        supertrend = st_df['supertrend'].values
-        direction = st_df['direction'].values
-        dates = st_df.index.to_numpy()
-
-        # Loop through data for backtesting
-        for i in range(1, len(st_df)):
-            current_price = close[i]
-            current_time = dates[i]
-
-            # Handle existing long position
-            if in_long:
-                exit_condition = False
-                exit_price = current_price
-                exit_type = "trend_flip"
-
-                # Check hard stop first (matches Pinescript)
-                if low[i] <= st_df['up_trend_hard_stop'].iloc[i]:
-                    exit_condition = True
-                    exit_price = max(low[i], st_df['up_trend_hard_stop'].iloc[i])
-                    exit_type = "hard_stop"
-                # Then check trend flip (matches Pinescript)
-                elif direction[i] > 0:  # Direction change to downtrend
-                    exit_condition = True
-                    exit_type = "trend_flip"
-
-                if exit_condition:
-                    points = exit_price - entry_price
-                    pnl_pct = points / entry_price
-                    running_pnl.append(pnl_pct)
-                    
-                    if points > 0:
-                        gross_profit += points
-                        winning_trades += 1
-                        current_streak = max(1, current_streak + 1)
-                        max_consecutive_wins = max(max_consecutive_wins, current_streak)
-                    else:
-                        gross_loss += abs(points)
-                        losing_trades += 1
-                        current_streak = min(-1, current_streak - 1)
-                        max_consecutive_losses = max(max_consecutive_losses, abs(current_streak))
-
-                    # Fixed duration calculation using pd.Timedelta
-                    trade_duration = pd.Timedelta(current_time - entry_time).total_seconds() / 3600
-                    
-                    trades.append({
-                        'trade_number': trade_number,
-                        'direction': 'long',
-                        'entry_time': entry_time,
-                        'entry_price': entry_price,
-                        'exit_time': current_time,
-                        'exit_price': exit_price,
-                        'exit_type': exit_type,
-                        'points': points,
-                        'pnl_percent': pnl_pct,
-                        'duration': trade_duration
-                    })
-                    
-                    # Update equity curve and drawdown
-                    current_equity = equity_curve[-1] + points
-                    equity_curve.append(current_equity)
-                    max_equity = max(max_equity, current_equity)
-                    current_drawdown = (max_equity - current_equity) / max_equity if max_equity > 0 else 0
-                    max_drawdown = max(max_drawdown, current_drawdown)
-                    
-                    in_long = False
-
-            # Handle existing short position
-            elif in_short:
-                exit_condition = False
-                exit_price = current_price
-                exit_type = "trend_flip"
-
-                # Check hard stop first (matches Pinescript)
-                if high[i] >= st_df['down_trend_hard_stop'].iloc[i]:
-                    exit_condition = True
-                    exit_price = min(high[i], st_df['down_trend_hard_stop'].iloc[i])
-                    exit_type = "hard_stop"
-                # Then check trend flip (matches Pinescript)
-                elif direction[i] < 0:  # Direction change to uptrend
-                    exit_condition = True
-                    exit_type = "trend_flip"
-
-                if exit_condition:
-                    points = entry_price - exit_price
-                    pnl_pct = points / entry_price
-                    running_pnl.append(pnl_pct)
-                    
-                    if points > 0:
-                        gross_profit += points
-                        winning_trades += 1
-                        current_streak = max(1, current_streak + 1)
-                        max_consecutive_wins = max(max_consecutive_wins, current_streak)
-                    else:
-                        gross_loss += abs(points)
-                        losing_trades += 1
-                        current_streak = min(-1, current_streak - 1)
-                        max_consecutive_losses = max(max_consecutive_losses, abs(current_streak))
-
-                    # Fixed duration calculation using pd.Timedelta
-                    trade_duration = pd.Timedelta(current_time - entry_time).total_seconds() / 3600
-                    
-                    trades.append({
-                        'trade_number': trade_number,
-                        'direction': 'short',
-                        'entry_time': entry_time,
-                        'entry_price': entry_price,
-                        'exit_time': current_time,
-                        'exit_price': exit_price,
-                        'exit_type': exit_type,
-                        'points': points,
-                        'pnl_percent': pnl_pct,
-                        'duration': trade_duration
-                    })
-                    
-                    # Update equity curve and drawdown
-                    current_equity = equity_curve[-1] + points
-                    equity_curve.append(current_equity)
-                    max_equity = max(max_equity, current_equity)
-                    current_drawdown = (max_equity - current_equity) / max_equity if max_equity > 0 else 0
-                    max_drawdown = max(max_drawdown, current_drawdown)
-                    
-                    in_short = False
-
-            # Check for new entries using updated Pinescript logic
-            if not in_long and not in_short:
-                # Long entry condition
-                if st_df['buy_signal'].iloc[i] and st_df['direction'].iloc[i] < 0:
-                    trade_number += 1
-                    in_long = True
-                    entry_price = current_price
-                    entry_time = current_time
-                # Short entry condition
-                elif st_df['sell_signal'].iloc[i] and st_df['direction'].iloc[i] > 0:
-                    trade_number += 1
-                    in_short = True
-                    entry_price = current_price
-                    entry_time = current_time
-
-        # Calculate performance metrics
-        trade_count = len(trades)
-        if trade_count > 0:
-            win_rate = winning_trades / trade_count
-            avg_trade_duration = sum(t['duration'] for t in trades) / trade_count
-            profit_factor = abs(gross_profit / gross_loss) if gross_loss != 0 else float('inf')
-            avg_win = gross_profit / winning_trades if winning_trades > 0 else 0
-            avg_loss = gross_loss / losing_trades if losing_trades > 0 else 0
+        for equity in equity_curve:
+            if equity > peak:
+                peak = equity
             
-            # Calculate returns for Sharpe ratio
-            returns_series = pd.Series(running_pnl)
-            if len(running_pnl) > 1:
-                returns_mean = returns_series.mean()
-                returns_std = returns_series.std()
-                sharpe_ratio = np.sqrt(252) * (returns_mean / returns_std) if returns_std > 0 else 0
-            else:
-                sharpe_ratio = 0
-            
-            # Calculate Expectancy
-            expectancy = (win_rate * avg_win) - ((1 - win_rate) * avg_loss)
-            
-            # Calculate Risk-adjusted return
-            risk_adjusted_return = avg_win / abs(avg_loss) if avg_loss != 0 else float('inf')
-        else:
-            win_rate = profit_factor = sharpe_ratio = expectancy = risk_adjusted_return = 0
-            avg_win = avg_loss = avg_trade_duration = 0
-
-        return {
-            'parameters': {
-                'atr_length': atr_length,
-                'factor': factor,
-                'buffer_multiplier': buffer_multiplier,
-                'hard_stop_distance': hard_stop_distance
-            },
-            'total_profit': gross_profit - gross_loss,
+            drawdown = peak - equity
+            if drawdown > max_drawdown:
+                max_drawdown = drawdown
+        
+        # Prepare results
+        results = {
+            'parameters': parameters,
+            'trade_count': trade_count,
+            'win_count': win_count,
+            'loss_count': loss_count,
+            'win_rate': win_rate,
+            'profit_factor': profit_factor,
             'gross_profit': gross_profit,
             'gross_loss': gross_loss,
-            'trade_count': trade_count,
-            'winning_trades': winning_trades,
-            'losing_trades': losing_trades,
-            'win_rate': win_rate,
-            'avg_trade_duration': avg_trade_duration,
-            'profit_factor': profit_factor,
-            'max_drawdown': max_drawdown,
-            'sharpe_ratio': sharpe_ratio,
-            'expectancy': expectancy,
-            'risk_adjusted_return': risk_adjusted_return,
-            'max_consecutive_wins': max_consecutive_wins,
-            'max_consecutive_losses': max_consecutive_losses,
-            'avg_win': avg_win,
+            'net_profit': gross_profit + gross_loss,
+            'avg_profit': avg_profit,
             'avg_loss': avg_loss,
-            'trades': trades,
-            'equity_curve': equity_curve
+            'max_drawdown': max_drawdown,
+            'avg_trade_duration': avg_trade_duration,
+            'avg_candle_count': avg_candle_count,
+            'trades': trades
         }
-        
-    except Exception as e:
-        error_msg = f"Error in backtest_supertrend: {str(e)}\n{traceback.format_exc()}"
-        print(f"\nDebug - Error in backtest_supertrend:")
-        print(error_msg)
-        logging.getLogger('processing_errors').error(error_msg)
-        return None
-
+    else:
+        results = {
+            'parameters': parameters,
+            'trade_count': 0,
+            'win_count': 0,
+            'loss_count': 0,
+            'win_rate': 0,
+            'profit_factor': 0,
+            'gross_profit': 0,
+            'gross_loss': 0,
+            'net_profit': 0,
+            'avg_profit': 0,
+            'avg_loss': 0,
+            'max_drawdown': 0,
+            'avg_trade_duration': 0,
+            'avg_candle_count': 0,
+            'trades': []
+        }
+    
+    return results
 
 
 def rank_parameter_combinations(self, final_results_df, filters):
@@ -1727,16 +1792,17 @@ class ResultsManager:
                 return pd.DataFrame()
 
 
-            # Apply minimum trade count filter (30 trades is statistically significant)
-            min_trades = 30
+            # Apply minimum trade count filter - FIXED: Use filters['min_trades'] instead of hardcoded value
+            min_trades = filters.get('min_trades', 30) if filters.get('use_min_trades', True) else 30
             print(f"Combinations before trade filter: {len(filtered_df)}")
+            print(f"Using minimum trade count filter: {min_trades}")
             filtered_df = filtered_df[filtered_df['trade_count'] >= min_trades]
 
             if filtered_df.empty:
                 print(f"\nNo parameter combinations have {min_trades}+ trades.")
                 print("Consider relaxing filter criteria or expanding parameter ranges.")
                 return pd.DataFrame()
-        
+    
             print(f"Combinations after trade filter: {len(filtered_df)}")
         
         
@@ -1879,6 +1945,161 @@ class ResultsManager:
         except Exception as e:
             self.processing_logger.error(f"Error creating performance summary: {str(e)}")
             print(f"\nError creating performance summary: {str(e)}")
+
+    def generate_summary_report(self, params, filters, final_results_df, top_combinations, start_time, file_paths):
+        """
+        Generates a comprehensive summary report for the backtest run
+    
+        Args:
+            params: Dictionary containing parameter ranges
+            filters: Dictionary containing filter settings
+            final_results_df: DataFrame with all results
+            top_combinations: DataFrame with top combinations
+            start_time: Start time of the run
+            file_paths: List of data files processed
+        """
+        try:
+            end_time = time.time()
+            processing_time = end_time - start_time
+            results_file = os.path.join(self.dir_manager.final_results_dir, 'summary_report.txt')
+        
+            with open(results_file, 'w') as f:
+                # Header
+                f.write("="*70 + "\n")
+                f.write(" SUPERTREND BACKTESTER: SUMMARY REPORT ".center(70) + "\n")
+                f.write("="*70 + "\n\n")
+            
+                # Run Information
+                f.write("RUN INFORMATION:\n")
+                f.write("-"*70 + "\n")
+                f.write(f"Run Date & Time (UTC): {self.current_utc}\n")
+                f.write(f"Run By: {self.user}\n")
+                f.write(f"Results Directory: {os.path.abspath(self.dir_manager.base_dir)}\n\n")
+            
+                # Data Files
+                f.write("DATA FILES PROCESSED:\n")
+                f.write("-"*70 + "\n")
+                for i, file_path in enumerate(file_paths, 1):
+                    f.write(f"{i}. {os.path.basename(file_path)}\n")
+                f.write("\n")
+            
+                # Parameter Ranges
+                f.write("PARAMETER RANGES TESTED:\n")
+                f.write("-"*70 + "\n")
+                f.write(f"ATR Length: {min(params['atr_lengths'])} to {max(params['atr_lengths'])}")
+                f.write(f" (step {params['atr_lengths'][1]-params['atr_lengths'][0] if len(params['atr_lengths'])>1 else 0})\n")
+            
+                f.write(f"Factor: {min(params['factors']):.2f} to {max(params['factors']):.2f}")
+                f.write(f" (step {params['factors'][1]-params['factors'][0]:.2f} if len(params['factors'])>1 else 0})\n")
+            
+                f.write(f"Buffer Multiplier: {min(params['buffers']):.2f} to {max(params['buffers']):.2f}")
+                f.write(f" (step {params['buffers'][1]-params['buffers'][0]:.2f} if len(params['buffers'])>1 else 0})\n")
+            
+                f.write(f"Hard Stop Distance: {min(params['stops'])} to {max(params['stops'])}")
+                f.write(f" (step {params['stops'][1]-params['stops'][0] if len(params['stops'])>1 else 0})\n")
+            
+                f.write(f"Total Combinations Tested: {params['total_combinations']:,}\n\n")
+            
+                # Filtering Settings
+                f.write("FILTERING SETTINGS:\n")
+                f.write("-"*70 + "\n")
+            
+                # Min Trade Count Filter
+                min_trades = filters.get('min_trades', 30)
+                f.write(f"Min Trade Count Filter: {'Enabled' if filters.get('use_min_trades', True) else 'Disabled'}")
+                if filters.get('use_min_trades', True):
+                    f.write(f" (threshold: {min_trades})\n")
+                else:
+                    f.write("\n")
+            
+                # Max Drawdown Filter
+                f.write(f"Max Drawdown Filter: {'Enabled' if filters.get('use_drawdown', False) else 'Disabled'}")
+                if filters.get('use_drawdown', False):
+                    f.write(f" (threshold: {filters.get('max_drawdown', 0):.2%})\n")
+                else:
+                    f.write("\n")
+            
+                # Min Profit Filter
+                f.write(f"Min Profit Filter: {'Enabled' if filters.get('use_profit', False) else 'Disabled'}")
+                if filters.get('use_profit', False):
+                    f.write(f" (threshold: {filters.get('min_profit', 0):.2%})\n")
+                else:
+                    f.write("\n")
+            
+                if not final_results_df.empty:
+                    f.write(f"Combinations After All Filtering: {len(final_results_df):,}\n\n")
+                else:
+                    f.write("No combinations passed all filters\n\n")
+            
+                # Top Combinations
+                f.write("TOP PARAMETER COMBINATIONS:\n")
+                f.write("-"*70 + "\n")
+                if not top_combinations.empty:
+                    for i, (_, row) in enumerate(top_combinations.iterrows(), 1):
+                        f.write(f"Rank {i}:\n")
+                        f.write(f"  Parameters: ATR={int(row['atr_length'])}, Factor={float(row['factor']):.2f}, ")
+                        f.write(f"Buffer={float(row['buffer_multiplier']):.2f}, Stop={int(row['hard_stop_distance'])}\n")
+                        f.write(f"  Profit Factor: {float(row.get('profit_factor', 0)):.2f}\n")
+                        f.write(f"  Win Rate: {float(row.get('win_rate', 0)):.2%}\n")
+                        f.write(f"  Trade Count: {int(row.get('trade_count', 0))}\n")
+                        f.write(f"  Net Profit: {float(row.get('total_profit', 0)):.2f}\n")
+                        f.write(f"  Max Drawdown: {float(row.get('max_drawdown', 0)):.2%}\n")
+                        f.write(f"  Avg Trade Duration: {float(row.get('avg_trade_duration', 0)):.2f} hours\n")
+                        f.write(f"  Avg Candle Count: {float(row.get('avg_candle_count', 0)):.1f}\n")
+                        f.write("\n")
+                else:
+                    f.write("No top combinations found\n\n")
+            
+                # Performance Summary
+                f.write("PERFORMANCE SUMMARY:\n")
+                f.write("-"*70 + "\n")
+                if not final_results_df.empty:
+                    f.write(f"Total Valid Results: {len(final_results_df):,}\n")
+                    f.write(f"Best Profit: {final_results_df['total_profit'].max():.2f}\n")
+                    f.write(f"Average Profit: {final_results_df['total_profit'].mean():.2f}\n")
+                    f.write(f"Best Win Rate: {final_results_df['win_rate'].max():.2%}\n")
+                    f.write(f"Best Profit Factor: {final_results_df['profit_factor'].max():.2f}\n")
+                
+                    if 'sharpe_ratio' in final_results_df.columns:
+                        f.write(f"Best Sharpe Ratio: {final_results_df['sharpe_ratio'].max():.2f}\n")
+                
+                    f.write(f"Max Drawdown Range: {final_results_df['max_drawdown'].min():.2%} to ")
+                    f.write(f"{final_results_df['max_drawdown'].max():.2%}\n\n")
+                else:
+                    f.write("No valid results to summarize\n\n")
+            
+                # System Information
+                f.write("SYSTEM INFORMATION:\n")
+                f.write("-"*70 + "\n")
+                hours = int(processing_time // 3600)
+                minutes = int((processing_time % 3600) // 60)
+                seconds = int(processing_time % 60)
+                f.write(f"Processing Time: {hours:02d}:{minutes:02d}:{seconds:02d}\n")
+                f.write(f"GPU Utilization: {'Yes' if cuda.is_available() else 'No'}\n")
+                f.write(f"Total Memory Used: {psutil.Process().memory_info().rss / (1024*1024):.2f} MB\n")
+                f.write(f"Forced Exit After 2 Days: Enabled\n")  # Added new feature
+                f.write("\n")
+            
+                # Time-Based Exit Information
+                f.write("TIME-BASED EXIT SETTINGS:\n")
+                f.write("-"*70 + "\n")
+                f.write("Trades will be automatically closed after 2 days\n")
+                f.write("This helps prevent excessively long positions and limits risk exposure\n")
+                f.write("Exit timing: 2 days after entry\n\n")
+            
+                # Footer
+                f.write("="*70 + "\n")
+                f.write(" END OF SUMMARY REPORT ".center(70) + "\n")
+                f.write("="*70 + "\n")
+        
+            print(f"\nSummary report generated: {results_file}")
+            return results_file
+        
+        except Exception as e:
+            error_msg = f"Error generating summary report: {str(e)}\n{traceback.format_exc()}"
+            print(f"\nError generating summary report: {str(e)}")
+            self.processing_logger.error(error_msg)
+            return None
 
 
 
@@ -2331,7 +2552,23 @@ def main():
                 print(error_msg)
                 logging.getLogger('processing_errors').error(error_msg)
                 continue
-
+        
+        #Generate TEXT Summary
+        try:
+            if 'results_manager' in locals() and 'params' in locals():
+                summary_file = results_manager.generate_summary_report(
+                    params=params,
+                    filters=filters,
+                    final_results_df=final_results_df if 'final_results_df' in locals() else pd.DataFrame(),
+                    top_combinations=top_combinations if 'top_combinations' in locals() else pd.DataFrame(),
+                    start_time=start_time,
+                    file_paths=selected_files
+                )
+                print(f"Summary report saved to: {summary_file}")
+        except Exception as e:
+            print(f"Error generating summary: {str(e)}")
+        
+        
         # Final cleanup and summary
         cleanup_memory()
         end_time = time.time()
