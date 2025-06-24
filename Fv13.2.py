@@ -764,13 +764,18 @@ def cleanup_gpu_memory():
 class StatusDisplay:
     """Tracks and displays progress of parameter combinations testing"""
     def __init__(self, params, total_combinations, filename, filters=None):
-        print("Debug: Initializing StatusDisplay")  # Debug output
-        
+        # Create a separate window for the status display if in a GUI environment
+        # For terminal, we'll use a simpler approach
         try:
-            # Initialize filters first
-            print("Debug: Setting up filters")  # Debug output
+            self.params = params
+            self.total_combinations = total_combinations
+            self.filename = filename
+            self.current_combo = 0
+            self.start_time = time.time()
+            self.top_combinations = []
+            self.running = True
+            
             if filters is None:
-                print("Debug: No filters provided, using defaults")  # Debug output
                 self.filters = {
                     'use_drawdown': False,
                     'use_profit': False,
@@ -780,30 +785,19 @@ class StatusDisplay:
                     'min_trades': None
                 }
             else:
-                print("Debug: Using provided filters")  # Debug output
                 self.filters = filters
-
-            # Initialize other attributes
-            print("Debug: Setting up other attributes")  # Debug output
-            self.params = params
-            self.total_combinations = total_combinations
-            self.filename = filename
-            self.current_combo = 0
-            self.start_time = time.time()
-            self.top_combinations = []
-            self.running = True
-            self.display_height = 20  # Number of lines in the display
             
-            # Reserve space for the status display
-            print("\n" * self.display_height)
+            # Print a separator that will make it easier to find the status
+            print("\n" + "=" * 80)
+            print(" STATUS DISPLAY - Refer to this line to find status updates ".center(80, "="))
+            print("=" * 80 + "\n")
             
-            # Initial draw
-            print("Debug: About to draw box")  # Debug output
+            # Initial display
             self._draw_box()
             
         except Exception as e:
             print(f"Error in StatusDisplay initialization: {str(e)}")
-            print(f"Traceback: {traceback.format_exc()}")
+            print(traceback.format_exc())
             raise
 
     def _format_time(self, seconds):
@@ -812,120 +806,65 @@ class StatusDisplay:
         seconds = int(seconds % 60)
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
-    def _move_cursor_to_top(self):
-        """Move cursor to the top of the reserved area"""
-        print(f"\033[{self.display_height}A", end='')  # Move up display_height lines
-
-    def _clear_status_area(self):
-        """Clear the status display area"""
-        self._move_cursor_to_top()
-        for _ in range(self.display_height):
-            print("\033[K")  # Clear current line
-            print("\033[1B", end='')  # Move down one line
-        self._move_cursor_to_top()
-
     def _draw_box(self):
+        """Draw the status box with a clear separator for visibility"""
         try:
-            print(f"Debug: Current filters: {self.filters}")  # Debug output
+            # Start with a clear separator to find the status
+            print("\n" + "=" * 80)
+            print(" CURRENT STATUS ".center(80, "="))
             
-            # Clear status area and move cursor to top
-            self._clear_status_area()
-
-            # Box top
+            # Box contents
             print("=" * 70)
             print("║" + " SUPERTREND BACKTESTER STATUS ".center(68) + "║")
             print("║" + f" {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')} ".center(68) + "║")
             print("=" * 70)
 
-            # Parameter ranges
-            print("║ Parameter Ranges:".ljust(69) + "║")
-            atr_range = f"ATR: {min(self.params['atr_lengths'])}-{max(self.params['atr_lengths'])} (step {self.params['atr_lengths'][1]-self.params['atr_lengths'][0]})"
-            factor_range = f"Factor: {min(self.params['factors']):.1f}-{max(self.params['factors']):.1f} (step {self.params['factors'][1]-self.params['factors'][0]:.1f})"
-            print(f"║ {atr_range:<30} {factor_range:<37}║")
-
-            buffer_range = f"Buffer: {min(self.params['buffers']):.1f}-{max(self.params['buffers']):.1f} (step {self.params['buffers'][1]-self.params['buffers'][0]:.1f})"
-            stop_range = f"Stop: {min(self.params['stops'])}-{max(self.params['stops'])} (step {self.params['stops'][1]-self.params['stops'][0]})"
-            print(f"║ {buffer_range:<30} {stop_range:<37}║")
-            print("=" * 70)
-
-            # Filtering information
-            print("║ Filtering Settings:".ljust(69) + "║")
+            # Progress stats
+            print(f"Progress: {self.current_combo}/{self.total_combinations} " + 
+                  f"({(self.current_combo/self.total_combinations)*100:.1f}%)")
             
-            # Check for any applied filters
-            use_drawdown = self.filters.get('use_drawdown', False)
-            use_profit = self.filters.get('use_profit', False)
-            use_min_trades = self.filters.get('use_min_trades', True)  # Default to True
-            
-            has_filters = use_drawdown or use_profit or use_min_trades
-            
-            if has_filters:
-                if use_drawdown and self.filters.get('max_drawdown') is not None:
-                    max_dd = self.filters.get('max_drawdown', 0)
-                    print(f"║ Max Drawdown: {max_dd:.1%}".ljust(69) + "║")
-                if use_profit and self.filters.get('min_profit') is not None:
-                    min_profit = self.filters.get('min_profit', 0)
-                    print(f"║ Min Profit: {min_profit:.1%}".ljust(69) + "║")
-                if use_min_trades and self.filters.get('min_trades') is not None:
-                    min_trades = self.filters.get('min_trades', 30)
-                    print(f"║ Min Trades: {min_trades}".ljust(69) + "║")
-            else:
-                print("║ No filters applied".ljust(69) + "║")
-            print("=" * 70)
-
-            # File and progress info
-            print(f"║ File: {os.path.basename(self.filename):<61}║")
-            progress = f"{self.current_combo:,}/{self.total_combinations:,} ({(self.current_combo/self.total_combinations)*100:.1f}%)"
-            print(f"║ Progress: {progress:<58}║")
-            print("=" * 70)
-
             # Time info
             elapsed = time.time() - self.start_time
             elapsed_str = self._format_time(elapsed)
-            print(f"║ Time Elapsed: {elapsed_str:<55}║")
+            print(f"Time Elapsed: {elapsed_str}")
             
             if self.current_combo > 0:
                 remaining = (elapsed / self.current_combo) * (self.total_combinations - self.current_combo)
                 eta_str = self._format_time(remaining)
-                print(f"║ ETA: {eta_str:<62}║")
-            else:
-                print("║" + " " * 68 + "║")
-            print("=" * 70)
-
+                print(f"ETA: {eta_str}")
+            
             # Top combinations
-            print("║ Top 3 Combinations (by Profit Factor):".ljust(69) + "║")
-            for i, combo in enumerate(self.top_combinations[-3:], 1):
-                combo_str = (f"{i}. ATR:{combo['atr']} F:{combo['factor']:.1f} "
-                           f"B:{combo['buffer']:.1f} S:{combo['stop']}")
-                metrics_str = f"PF:{combo['pf']:.2f} | WR:{combo['wr']:.1%} | Trades:{combo['trades']}"
-                print(f"║ {combo_str:<35} {metrics_str:<32}║")
+            print("\nTop Combinations (by Profit Factor):")
+            if self.top_combinations:
+                for i, combo in enumerate(self.top_combinations[-3:], 1):
+                    print(f"{i}. ATR:{combo['atr']} F:{combo['factor']:.1f} " +
+                          f"B:{combo['buffer']:.1f} S:{combo['stop']} | " +
+                          f"PF:{combo['pf']:.2f} | WR:{combo['wr']:.1%} | Trades:{combo['trades']}")
+            else:
+                print("No combinations found yet")
+                
+            print("=" * 80)
+            print(" END OF STATUS - Processing continues below ".center(80, "="))
+            print("=" * 80 + "\n")
             
-            # Fill remaining lines if less than 3 combinations
-            for _ in range(3 - len(self.top_combinations)):
-                print("║" + " " * 68 + "║")
-            
-            print("=" * 70)
-            
-            # Move cursor to the bottom of the display area
-            print("\033[E", end='')  # Move to the beginning of the next line
             sys.stdout.flush()
-
+            
         except Exception as e:
             print(f"Error in _draw_box: {str(e)}")
-            print(f"Traceback: {traceback.format_exc()}")
-            raise
+            print(traceback.format_exc())
 
     def update(self, current_combo, top_combo=None):
+        """Update status with current progress"""
         self.current_combo = current_combo
         if top_combo:
             self._update_top_combinations(top_combo)
         self._draw_box()
 
     def _update_top_combinations(self, combo):
-        # Check if this combo meets the minimum trade filter
+        """Update list of top combinations"""
         trade_count = combo.get('trade_count', 0)
         min_trades = self.filters.get('min_trades', 0) if self.filters.get('use_min_trades', False) else 0
         
-        # Only add combinations that meet any minimum trade filter
         if trade_count >= min_trades:
             new_combo = {
                 'atr': combo['parameters']['atr_length'],
@@ -937,13 +876,16 @@ class StatusDisplay:
                 'trades': trade_count
             }
             
-            # Add to list and maintain sort by profit factor
             self.top_combinations.append(new_combo)
             self.top_combinations.sort(key=lambda x: x['pf'], reverse=True)
             self.top_combinations = self.top_combinations[:3]
 
     def cleanup(self):
         self.running = False
+        print("\n" + "=" * 80)
+        print(" STATUS DISPLAY TERMINATED ".center(80, "="))
+        print("=" * 80 + "\n")
+
 
 def backtest_supertrend(df, parameters):
     """
@@ -964,7 +906,17 @@ def backtest_supertrend(df, parameters):
     
     # Calculate SuperTrend
     df_tmp = df.copy()
-    df_tmp = calculate_supertrend(df_tmp, atr_length, factor, buffer_multiplier)
+    try:
+        df_tmp = calculate_supertrend(df_tmp, atr_length, factor, buffer_multiplier)
+    except Exception as e:
+        print(f"Error calculating SuperTrend: {e}")
+        return None
+    
+    # Debug info - critical for diagnosing
+    print(f"Debug - SuperTrend calculation result:")
+    print(f"Data shape after SuperTrend: {df_tmp.shape}")
+    print(f"Buy signals count: {df_tmp['buy_signal'].sum()}")
+    print(f"Sell signals count: {df_tmp['sell_signal'].sum()}")
     
     # Prepare for backtesting
     dates = df_tmp.index.values
@@ -972,9 +924,7 @@ def backtest_supertrend(df, parameters):
     highs = df_tmp['high'].values
     lows = df_tmp['low'].values
     closes = df_tmp['close'].values
-    
-    # Changed 'trend' to 'direction' to match the column name created by calculate_supertrend
-    directions = df_tmp['direction'].values
+    directions = df_tmp['direction'].values  # Using direction instead of trend
     
     # Track trades
     trades = []
@@ -988,7 +938,7 @@ def backtest_supertrend(df, parameters):
     high_since_entry = 0
     low_since_entry = float('inf')
     
-    # Trading loop
+    # Trading loop - COMPLETE IMPLEMENTATION
     for i in range(1, len(df_tmp)):
         current_time = dates[i]
         current_price = closes[i]
@@ -1013,9 +963,8 @@ def backtest_supertrend(df, parameters):
                 exit_condition = True
                 exit_type = "time_based_exit"
                 
-            # Check other exit conditions - use direction instead of trend
-            elif current_direction < 0 and previous_direction > 0:
-                # Direction flipped to bearish - exit long
+            # Check other exit conditions
+            elif current_direction > 0 and previous_direction < 0:  # Direction flipped to bearish
                 exit_condition = True
                 exit_type = "trend_flip"
                 
@@ -1024,7 +973,271 @@ def backtest_supertrend(df, parameters):
                 exit_condition = True
                 exit_price = entry_price - hard_stop_distance
                 exit_type = "stop_loss"
+                
+            # Process exit if needed
+            if exit_condition:
+                points = exit_price - entry_price
+                pnl_pct = points / entry_price
+                
+                # Calculate duration using candle count
+                entry_idx = np.where(dates == entry_time)[0][0]
+                exit_idx = i
+                candle_count = exit_idx - entry_idx
+                
+                # Each candle is 5 minutes (assuming 5-min chart)
+                trade_duration = candle_count * (5/60)  # Convert to hours
+                
+                trades.append({
+                    'trade_number': trade_number,
+                    'direction': 'long',
+                    'entry_time': entry_time,
+                    'entry_price': entry_price,
+                    'exit_time': current_time, 
+                    'exit_price': exit_price,
+                    'exit_type': exit_type,
+                    'points': points,
+                    'pnl_percent': pnl_pct,
+                    'duration': trade_duration,
+                    'candle_count': candle_count
+                })
+                
+                in_long = False
+                high_since_entry = 0
+                
+        # Check for short exit
+        elif in_short:
+            exit_condition = False
+            exit_price = current_price
+            exit_type = "trend_flip"
+            
+            # Update tracking values
+            low_since_entry = min(low_since_entry, lows[i])
+            
+            # Check for time-based exit (after 2 days)
+            entry_datetime = pd.to_datetime(entry_time)
+            current_datetime = pd.to_datetime(current_time)
+            days_in_trade = (current_datetime - entry_datetime).total_seconds() / (24 * 60 * 60)
+            
+            if days_in_trade >= 2:
+                exit_condition = True
+                exit_type = "time_based_exit"
+                
+            # Check other exit conditions
+            elif current_direction < 0 and previous_direction > 0:
+                # Direction flipped to bullish - exit short
+                exit_condition = True
+                exit_type = "trend_flip"
+                
+            elif (current_price - entry_price) >= hard_stop_distance:
+                # Hard stop loss hit
+                exit_condition = True
+                exit_price = entry_price + hard_stop_distance
+                exit_type = "stop_loss"
+                
+            # Process exit if needed
+            if exit_condition:
+                points = entry_price - exit_price
+                pnl_pct = points / entry_price
+                
+                # Calculate duration using candle count
+                entry_idx = np.where(dates == entry_time)[0][0]
+                exit_idx = i
+                candle_count = exit_idx - entry_idx
+                
+                # Each candle is 5 minutes (assuming 5-min chart)
+                trade_duration = candle_count * (5/60)  # Convert to hours
+                
+                trades.append({
+                    'trade_number': trade_number,
+                    'direction': 'short',
+                    'entry_time': entry_time,
+                    'entry_price': entry_price,
+                    'exit_time': current_time,
+                    'exit_price': exit_price,
+                    'exit_type': exit_type,
+                    'points': points,
+                    'pnl_percent': pnl_pct,
+                    'duration': trade_duration,
+                    'candle_count': candle_count
+                })
+                
+                in_short = False
+                low_since_entry = float('inf')
+        
+        # Check for entries (only if not in a position)
+        if not in_long and not in_short:
+            # Use buy_signal and sell_signal from SuperTrend calculation
+            if df_tmp['buy_signal'].iloc[i]:  # Using the buy_signal column from SuperTrend
+                trade_number += 1
+                entry_price = current_price
+                entry_time = current_time
+                high_since_entry = highs[i]
+                in_long = True
+                print(f"Debug: Long entry at index {i}, price {entry_price}, time {entry_time}")
+                
+            elif df_tmp['sell_signal'].iloc[i]:  # Using the sell_signal column from SuperTrend
+                trade_number += 1
+                entry_price = current_price
+                entry_time = current_time
+                low_since_entry = lows[i]
+                in_short = True
+                print(f"Debug: Short entry at index {i}, price {entry_price}, time {entry_time}")
+    
+    # Close any open position at the end
+    if in_long:
+        points = closes[-1] - entry_price
+        pnl_pct = points / entry_price
+        
+        entry_idx = np.where(dates == entry_time)[0][0]
+        exit_idx = len(df_tmp) - 1
+        candle_count = exit_idx - entry_idx
+        trade_duration = candle_count * (5/60)  # Convert to hours
+        
+        trades.append({
+            'trade_number': trade_number,
+            'direction': 'long',
+            'entry_time': entry_time,
+            'entry_price': entry_price,
+            'exit_time': dates[-1],
+            'exit_price': closes[-1],
+            'exit_type': 'end_of_data',
+            'points': points,
+            'pnl_percent': pnl_pct,
+            'duration': trade_duration,
+            'candle_count': candle_count
+        })
+        
+    elif in_short:
+        points = entry_price - closes[-1]
+        pnl_pct = points / entry_price
+        
+        entry_idx = np.where(dates == entry_time)[0][0]
+        exit_idx = len(df_tmp) - 1
+        candle_count = exit_idx - entry_idx
+        trade_duration = candle_count * (5/60)  # Convert to hours
+        
+        trades.append({
+            'trade_number': trade_number,
+            'direction': 'short',
+            'entry_time': entry_time,
+            'entry_price': entry_price,
+            'exit_time': dates[-1],
+            'exit_price': closes[-1],
+            'exit_type': 'end_of_data',
+            'points': points,
+            'pnl_percent': pnl_pct,
+            'duration': trade_duration,
+            'candle_count': candle_count
+        })
+    
+    # Calculate backtest statistics
+    trade_count = len(trades)
+    print(f"Debug: Total trades generated: {trade_count}")
+    
+    if trade_count > 0:
+        win_count = sum(1 for t in trades if t['points'] > 0)
+        loss_count = sum(1 for t in trades if t['points'] <= 0)
+        win_rate = win_count / trade_count if trade_count > 0 else 0
+        
+        gross_profit = sum(t['points'] for t in trades if t['points'] > 0)
+        gross_loss = sum(t['points'] for t in trades if t['points'] <= 0)
+        profit_factor = abs(gross_profit / gross_loss) if gross_loss != 0 else float('inf')
+        
+        avg_profit = gross_profit / win_count if win_count > 0 else 0
+        avg_loss = gross_loss / loss_count if loss_count > 0 else 0
+        
+        avg_trade_duration = sum(t['duration'] for t in trades) / trade_count
+        avg_candle_count = sum(t['candle_count'] for t in trades) / trade_count
+        
+        # Calculate drawdown
+        equity_curve = [0]
+        for trade in trades:
+            equity_curve.append(equity_curve[-1] + trade['points'])
+        
+        peak = 0
+        drawdown = 0
+        max_drawdown = 0
+        
+        for equity in equity_curve:
+            if equity > peak:
+                peak = equity
+            
+            drawdown = peak - equity
+            if drawdown > max_drawdown:
+                max_drawdown = drawdown
+        
+        # Calculate additional metrics
+        returns = [t['points'] for t in trades]
+        returns_array = np.array(returns)
+        sharpe_ratio = returns_array.mean() / returns_array.std() if returns_array.std() != 0 else 0
+        
+        # Calculate max consecutive wins/losses
+        win_loss_array = np.array([1 if t['points'] > 0 else 0 for t in trades])
+        max_consecutive_wins = max_consecutive(win_loss_array, 1)
+        max_consecutive_losses = max_consecutive(win_loss_array, 0)
+        
+        # Total profit
+        total_profit = sum(t['points'] for t in trades)
+        
+        # Prepare results
+        results = {
+            'parameters': parameters,
+            'trade_count': trade_count,
+            'win_count': win_count,
+            'loss_count': loss_count,
+            'win_rate': win_rate,
+            'profit_factor': profit_factor,
+            'gross_profit': gross_profit,
+            'gross_loss': gross_loss,
+            'total_profit': total_profit,
+            'avg_profit': avg_profit,
+            'avg_loss': avg_loss,
+            'max_drawdown': max_drawdown,
+            'avg_trade_duration': avg_trade_duration,
+            'avg_candle_count': avg_candle_count,
+            'sharpe_ratio': sharpe_ratio,
+            'max_consecutive_wins': max_consecutive_wins,
+            'max_consecutive_losses': max_consecutive_losses,
+            'trades': trades
+        }
+    else:
+        results = {
+            'parameters': parameters,
+            'trade_count': 0,
+            'win_count': 0,
+            'loss_count': 0,
+            'win_rate': 0,
+            'profit_factor': 0,
+            'gross_profit': 0,
+            'gross_loss': 0,
+            'total_profit': 0,
+            'avg_profit': 0,
+            'avg_loss': 0,
+            'max_drawdown': 0,
+            'avg_trade_duration': 0,
+            'avg_candle_count': 0,
+            'sharpe_ratio': 0,
+            'max_consecutive_wins': 0,
+            'max_consecutive_losses': 0,
+            'trades': []
+        }
+    
+    return results
 
+# Helper function for calculating max consecutive wins/losses
+def max_consecutive(arr, val):
+    """Calculate maximum consecutive occurrences of val in arr"""
+    max_count = 0
+    current_count = 0
+    
+    for v in arr:
+        if v == val:
+            current_count += 1
+            max_count = max(max_count, current_count)
+        else:
+            current_count = 0
+            
+    return max_count
 
 
 def rank_parameter_combinations(self, final_results_df, filters):
