@@ -437,6 +437,80 @@ def load_ohlc_data(file_path):
         raise
 
 
+def analyze_ohlc_data(df):
+    """
+    Analyze imported OHLC data and return detailed information about timeframe,
+    date range, trading days, and basic statistics
+    """
+    analysis = {}
+    
+    # Detect timeframe
+    if len(df) > 1:
+        time_diffs = [(df.index[i+1] - df.index[i]).total_seconds() for i in range(min(100, len(df)-1))]
+        most_common_diff = max(set(time_diffs), key=time_diffs.count)
+        
+        # Convert seconds to human-readable timeframe
+        if most_common_diff == 60:
+            analysis['timeframe'] = "1 minute"
+        elif most_common_diff == 300:
+            analysis['timeframe'] = "5 minutes"
+        elif most_common_diff == 900:
+            analysis['timeframe'] = "15 minutes"
+        elif most_common_diff == 1800:
+            analysis['timeframe'] = "30 minutes"
+        elif most_common_diff == 3600:
+            analysis['timeframe'] = "1 hour"
+        elif most_common_diff == 86400:
+            analysis['timeframe'] = "1 day"
+        else:
+            analysis['timeframe'] = f"{most_common_diff} seconds"
+    else:
+        analysis['timeframe'] = "Unknown (insufficient data points)"
+    
+    # Date range information
+    analysis['start_date'] = df.index.min().strftime('%Y-%m-%d')
+    analysis['end_date'] = df.index.max().strftime('%Y-%m-%d')
+    
+    # Calculate total days and trading days
+    total_days = (df.index.max() - df.index.min()).days + 1
+    analysis['total_calendar_days'] = total_days
+    
+    # Count distinct trading days - FIX: use numpy's unique instead of pandas'
+    try:
+        # First attempt - for pandas DatetimeIndex
+        if hasattr(df.index, 'date'):
+            # Convert to Python dates then count unique
+            date_list = [d.date() for d in df.index]
+            analysis['trading_days'] = len(set(date_list))
+        else:
+            # Alternative approach for numpy arrays
+            date_strings = [d.split(' ')[0] for d in df.index.astype(str)]
+            analysis['trading_days'] = len(set(date_strings))
+    except Exception as e:
+        print(f"Warning: Could not calculate unique trading days: {e}")
+        analysis['trading_days'] = "Unknown"
+    
+    # Number of candles
+    analysis['total_candles'] = len(df)
+    
+    # Basic price information
+    analysis['price_min'] = df['low'].min()
+    analysis['price_max'] = df['high'].max()
+    analysis['price_avg'] = df['close'].mean()
+    
+    # Volatility metrics
+    analysis['avg_candle_range_pct'] = ((df['high'] - df['low']) / df['close']).mean() * 100
+    
+    # Data quality checks
+    analysis['missing_values'] = df.isna().sum().sum()
+    
+    # Safely check for gaps
+    try:
+        analysis['has_gaps'] = bool(max(time_diffs) > (most_common_diff * 3))
+    except:
+        analysis['has_gaps'] = "Unknown"
+    
+    return analysis
 # After your imports, add this block
 # After imports section
 def check_gpu_availability():
@@ -1047,6 +1121,16 @@ def backtest_supertrend(df, parameters):
                     drawdowns.append(abs(trade_profit_pct))
                     max_drawdown = max(max_drawdown, abs(trade_profit_pct))
                 
+                # Calculate R:R ratio
+                initial_risk = hard_stop_distance  # Risk is the stop loss distance
+                actual_reward = abs(trade_profit)  # Absolute profit amount
+
+                # Calculate R:R ratio (avoid division by zero)
+                if initial_risk > 0:
+                    r_r_ratio = actual_reward / initial_risk
+                else:
+                    r_r_ratio = 0
+                
                 # Record trade details
                 trades.append({
                     'trade_number': trade_number,
@@ -1058,7 +1142,8 @@ def backtest_supertrend(df, parameters):
                     'profit': trade_profit,
                     'profit_pct': trade_profit_pct,
                     'duration_hours': trade_duration,
-                    'candle_count': i - entry_index
+                    'candle_count': i - entry_index,
+                    'risk_reward_ratio': r_r_ratio  # Added R:R ratio
                 })
                 
                 # Reset position tracking
@@ -1124,6 +1209,16 @@ def backtest_supertrend(df, parameters):
                     drawdowns.append(abs(trade_profit_pct))
                     max_drawdown = max(max_drawdown, abs(trade_profit_pct))
                 
+                # Calculate R:R ratio
+                initial_risk = hard_stop_distance  # Risk is the stop loss distance
+                actual_reward = abs(trade_profit)  # Absolute profit amount
+
+                # Calculate R:R ratio (avoid division by zero)
+                if initial_risk > 0:
+                    r_r_ratio = actual_reward / initial_risk
+                else:
+                    r_r_ratio = 0
+                
                 # Record trade details
                 trades.append({
                     'trade_number': trade_number,
@@ -1135,7 +1230,8 @@ def backtest_supertrend(df, parameters):
                     'profit': trade_profit,
                     'profit_pct': trade_profit_pct,
                     'duration_hours': trade_duration,
-                    'candle_count': i - entry_index
+                    'candle_count': i - entry_index,
+                    'risk_reward_ratio': r_r_ratio  # Added R:R ratio
                 })
                 
                 # Reset position tracking
@@ -1182,6 +1278,16 @@ def backtest_supertrend(df, parameters):
             drawdowns.append(abs(trade_profit_pct))
             max_drawdown = max(max_drawdown, abs(trade_profit_pct))
         
+        # Calculate R:R ratio
+        initial_risk = hard_stop_distance  # Risk is the stop loss distance
+        actual_reward = abs(trade_profit)  # Absolute profit amount
+
+        # Calculate R:R ratio (avoid division by zero)
+        if initial_risk > 0:
+            r_r_ratio = actual_reward / initial_risk
+        else:
+            r_r_ratio = 0
+            
         # Record trade details
         trades.append({
             'trade_number': trade_number,
@@ -1193,7 +1299,8 @@ def backtest_supertrend(df, parameters):
             'profit': trade_profit,
             'profit_pct': trade_profit_pct,
             'duration_hours': trade_duration,
-            'candle_count': len(df_tmp) - entry_index
+            'candle_count': len(df_tmp) - entry_index,
+            'risk_reward_ratio': r_r_ratio  # Added R:R ratio
         })
     
     # Calculate performance metrics
@@ -1220,6 +1327,9 @@ def backtest_supertrend(df, parameters):
     # Calculate average candle count per trade
     avg_candle_count = sum(t['candle_count'] for t in trades) / len(trades) if trades else 0
     
+    # Calculate average R:R ratio
+    avg_r_r_ratio = sum(t.get('risk_reward_ratio', 0) for t in trades) / len(trades) if trades else 0
+    
     # Return results
     return {
         'parameters': parameters,
@@ -1233,9 +1343,9 @@ def backtest_supertrend(df, parameters):
         'avg_candle_count': avg_candle_count,
         'max_consecutive_wins': max_consecutive_wins,
         'max_consecutive_losses': max_consecutive_losses,
+        'avg_r_r_ratio': avg_r_r_ratio,  # Added average R:R ratio
         'trades': trades
     }
-
 
 
 
@@ -1626,8 +1736,6 @@ class BatchProcessor:
             return pd.DataFrame()
 
 
-CURRENT_UTC = "2025-06-12 22:24:39"
-CURRENT_USER = "arullr001"
 
 class ResultsManager:
     """Manages the generation and storage of results and analysis"""
@@ -1636,10 +1744,110 @@ class ResultsManager:
         self.processing_logger = logging.getLogger('processing_errors')
         self.system_logger = logging.getLogger('system_errors')
         self.cached_results = {}
-        self.current_utc = CURRENT_UTC
-        self.user = CURRENT_USER
-
-
+        self.current_utc = "2025-06-24 09:37:20"  # Updated timestamp
+        self.user = "arullr001"  # Updated user
+        
+    def save_detailed_trade_data(self, top_combinations, df, file_path):
+        """
+        Save detailed trade execution data for top parameter combinations
+        
+        Args:
+            top_combinations: DataFrame with top parameter combinations
+            df: Original OHLC data DataFrame
+            file_path: Path to the original data file
+        """
+        try:
+            # Create directory for detailed trade data
+            trades_dir = os.path.join(self.dir_manager.final_results_dir, 'trade_details')
+            os.makedirs(trades_dir, exist_ok=True)
+            
+            # Save input data analysis
+            data_analysis = analyze_ohlc_data(df)
+            analysis_file = os.path.join(trades_dir, 'data_analysis.json')
+            with open(analysis_file, 'w') as f:
+                # Convert any non-serializable values to strings
+                serializable_analysis = {k: str(v) if not isinstance(v, (int, float, bool, str)) else v 
+                                         for k, v in data_analysis.items()}
+                json.dump(serializable_analysis, f, indent=4)
+            
+            print(f"\nData analysis saved to: {analysis_file}")
+            
+            # For each top combination, run backtest again and save full trade details
+            for i, (idx, params) in enumerate(top_combinations.iterrows(), 1):
+                parameters = {
+                    'atr_length': int(params['atr_length']),
+                    'factor': float(params['factor']),
+                    'buffer_multiplier': float(params['buffer_multiplier']),
+                    'hard_stop_distance': float(params['hard_stop_distance'])
+                }
+                
+                # Run backtest to get detailed trade info
+                print(f"\nGenerating detailed trade data for combination {i}...")
+                result = backtest_supertrend(df, parameters)
+                
+                if result and 'trades' in result and result['trades']:
+                    # Convert trade info to DataFrame
+                    trades_df = pd.DataFrame(result['trades'])
+                    
+                    # Add parameter info to each row for reference
+                    for param_name, param_value in parameters.items():
+                        trades_df[param_name] = param_value
+                    
+                    # Calculate risk-to-reward metrics
+                    if 'risk_reward_ratio' in trades_df.columns:
+                        # Calculate additional R:R metrics
+                        profitable_trades = trades_df[trades_df['profit'] > 0]
+                        losing_trades = trades_df[trades_df['profit'] <= 0]
+                        
+                        avg_win_rr = profitable_trades['risk_reward_ratio'].mean() if len(profitable_trades) > 0 else 0
+                        avg_loss_rr = losing_trades['risk_reward_ratio'].mean() if len(losing_trades) > 0 else 0
+                        
+                        # Add to the summary metrics
+                        r_r_metrics = {
+                            'avg_r_r_ratio': result.get('avg_r_r_ratio', 0),
+                            'avg_win_r_r': avg_win_rr,
+                            'avg_loss_r_r': avg_loss_rr,
+                            'r_r_ratio_std': trades_df['risk_reward_ratio'].std() if 'risk_reward_ratio' in trades_df else 0
+                        }
+                    else:
+                        r_r_metrics = {}
+                    
+                    # Save to CSV
+                    csv_file = os.path.join(trades_dir, f'combination_{i}_trades.csv')
+                    trades_df.to_csv(csv_file, index=False)
+                    print(f"Saved detailed trade data for combination {i} to {csv_file}")
+                    
+                    # Also save a summary for this combination
+                    summary_file = os.path.join(trades_dir, f'combination_{i}_summary.json')
+                    with open(summary_file, 'w') as f:
+                        json.dump({
+                            'parameters': parameters,
+                            'metrics': {
+                                'total_profit': result['total_profit'],
+                                'trade_count': result['trade_count'],
+                                'win_rate': result['win_rate'],
+                                'profit_factor': result['profit_factor'],
+                                'max_drawdown': result['max_drawdown'],
+                                'avg_trade_duration': result['avg_trade_duration'],
+                                'max_consecutive_wins': result['max_consecutive_wins'],
+                                'max_consecutive_losses': result['max_consecutive_losses'],
+                                **r_r_metrics  # Include R:R metrics
+                            },
+                            'data_file': os.path.basename(file_path),
+                            'data_analysis': {
+                                'timeframe': data_analysis.get('timeframe', 'Unknown'),
+                                'date_range': f"{data_analysis.get('start_date', '')} to {data_analysis.get('end_date', '')}",
+                                'total_candles': data_analysis.get('total_candles', 0),
+                                'trading_days': data_analysis.get('trading_days', 0)
+                            }
+                        }, f, indent=4)
+                    
+            return True
+        except Exception as e:
+            self.processing_logger.error(f"Error saving detailed trade data: {str(e)}")
+            print(f"\nError saving detailed trade data: {str(e)}")
+            print(traceback.format_exc())
+            return False
 
     def rank_parameter_combinations(self, final_results_df, filters):
         """Rank parameter combinations based on multiple metrics with optional filtering"""
@@ -1677,13 +1885,20 @@ class ResultsManager:
     
             print(f"Combinations after trade filter: {len(filtered_df)}")
         
-        
-            # Calculate composite score
-            filtered_df['composite_score'] = (
-                filtered_df['profit_factor'] * 0.4 +    # 40% weight
-                filtered_df['sharpe_ratio'] * 0.3 +     # 30% weight
-                filtered_df['win_rate'] * 0.3           # 30% weight
-            )
+            # Calculate composite score - include R:R ratio in the scoring if available
+            if 'avg_r_r_ratio' in filtered_df.columns:
+                filtered_df['composite_score'] = (
+                    filtered_df['profit_factor'] * 0.35 +    # 35% weight
+                    filtered_df['sharpe_ratio'] * 0.25 +     # 25% weight
+                    filtered_df['win_rate'] * 0.25 +         # 25% weight
+                    filtered_df['avg_r_r_ratio'] * 0.15      # 15% weight
+                )
+            else:
+                filtered_df['composite_score'] = (
+                    filtered_df['profit_factor'] * 0.4 +    # 40% weight
+                    filtered_df['sharpe_ratio'] * 0.3 +     # 30% weight
+                    filtered_df['win_rate'] * 0.3           # 30% weight
+                )
 
             # Sort by profit factor first, then use composite score for tie-breaking
             ranked_df = filtered_df.sort_values(
@@ -1740,7 +1955,8 @@ class ResultsManager:
                         'total_profit': float(row['total_profit']),
                         'expectancy': float(row.get('expectancy', 0)),
                         'trade_count': int(row['trade_count']),
-                        'avg_trade_duration': float(row['avg_trade_duration'])
+                        'avg_trade_duration': float(row['avg_trade_duration']),
+                        'avg_r_r_ratio': float(row.get('avg_r_r_ratio', 0)) # Add R:R ratio if available
                     }
                 }
                 summary_data['top_5_combinations'].append(combo_data)
@@ -1755,6 +1971,8 @@ class ResultsManager:
                 print(f"Net Profit: {row['total_profit']:.2f}")
                 print(f"Total Trades: {row['trade_count']}")
                 print(f"Avg Duration: {row['avg_trade_duration']:.2f} hours")
+                if 'avg_r_r_ratio' in row:
+                    print(f"Avg Risk-Reward Ratio: {row['avg_r_r_ratio']:.2f}")
 
             # Save summary to JSON
             summary_file = os.path.join(detailed_results_dir, 'top_5_summary.json')
@@ -1768,9 +1986,6 @@ class ResultsManager:
             print(f"\nError ranking parameter combinations: {str(e)}")
             return pd.DataFrame()
     
-
-
-
     def create_performance_summary(self, final_results_df):
         """Creates and saves a performance summary of the results"""
         try:
@@ -1807,6 +2022,14 @@ class ResultsManager:
                     'profit_factor_best': float(final_results_df['profit_factor'].max())
                 }
             }
+            
+            # Add risk reward metrics if available
+            if 'avg_r_r_ratio' in final_results_df.columns:
+                summary['risk_reward_metrics'] = {
+                    'avg_r_r_ratio': float(final_results_df['avg_r_r_ratio'].mean()),
+                    'best_r_r_ratio': float(final_results_df['avg_r_r_ratio'].max()),
+                    'worst_r_r_ratio': float(final_results_df['avg_r_r_ratio'].min()),
+                }
 
             # Save summary to JSON
             summary_file = os.path.join(self.dir_manager.final_results_dir, 'performance_summary.json')
@@ -1853,6 +2076,20 @@ class ResultsManager:
                 f.write("-"*70 + "\n")
                 for i, file_path in enumerate(file_paths, 1):
                     f.write(f"{i}. {os.path.basename(file_path)}\n")
+
+                    # Try to load the data analysis if it exists
+                    analysis_file = os.path.join(self.dir_manager.final_results_dir, 'trade_details', 'data_analysis.json')
+                    if os.path.exists(analysis_file):
+                        try:
+                            with open(analysis_file, 'r') as af:
+                                data_analysis = json.load(af)
+                                f.write(f"   - Timeframe: {data_analysis.get('timeframe', 'Unknown')}\n")
+                                f.write(f"   - Date Range: {data_analysis.get('start_date', '')} to {data_analysis.get('end_date', '')}\n") 
+                                f.write(f"   - Trading Days: {data_analysis.get('trading_days', '')}\n")
+                                f.write(f"   - Total Candles: {data_analysis.get('total_candles', '')}\n")
+                                f.write(f"   - Price Range: {data_analysis.get('price_min', '')} to {data_analysis.get('price_max', '')}\n")
+                        except Exception as e:
+                            self.processing_logger.error(f"Error reading data analysis: {str(e)}")
                 f.write("\n")
             
                 # Parameter Ranges
@@ -1918,6 +2155,8 @@ class ResultsManager:
                         f.write(f"  Max Drawdown: {float(row.get('max_drawdown', 0)):.2%}\n")
                         f.write(f"  Avg Trade Duration: {float(row.get('avg_trade_duration', 0)):.2f} hours\n")
                         f.write(f"  Avg Candle Count: {float(row.get('avg_candle_count', 0)):.1f}\n")
+                        if 'avg_r_r_ratio' in row:
+                            f.write(f"  Avg Risk-Reward Ratio: {float(row.get('avg_r_r_ratio', 0)):.2f}\n")
                         f.write("\n")
                 else:
                     f.write("No top combinations found\n\n")
@@ -1934,6 +2173,9 @@ class ResultsManager:
                 
                     if 'sharpe_ratio' in final_results_df.columns:
                         f.write(f"Best Sharpe Ratio: {final_results_df['sharpe_ratio'].max():.2f}\n")
+                    
+                    if 'avg_r_r_ratio' in final_results_df.columns:
+                        f.write(f"Best Risk-Reward Ratio: {final_results_df['avg_r_r_ratio'].max():.2f}\n")
                 
                     f.write(f"Max Drawdown Range: {final_results_df['max_drawdown'].min():.2%} to ")
                     f.write(f"{final_results_df['max_drawdown'].max():.2%}\n\n")
@@ -1972,7 +2214,6 @@ class ResultsManager:
             print(f"\nError generating summary report: {str(e)}")
             self.processing_logger.error(error_msg)
             return None
-
 
 
 def create_performance_visualizations(self, df):
@@ -2231,7 +2472,7 @@ def main():
         print("=" * 50)
         print(" SUPER TREND STRATEGY BACKTESTER (OPTIMIZED) ".center(50, "="))
         print("=" * 50)
-        print(f"Started at (UTC): 2025-06-14 16:35:07")
+        print(f"Started at (UTC): {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"User: arullr001")
 
         # Initialize managers
@@ -2261,7 +2502,7 @@ def main():
         print(f"├── error_logs/")
         print(f"└── final_results/")
 
-        # --- NEW FILE SELECTION SECTION ---
+        # --- FILE SELECTION SECTION ---
         print("\nPlease select one or more OHLC data files (CSV/XLSX/XLS) using the file picker...")
         selected_files = select_files_gui()
         if not selected_files:
@@ -2290,7 +2531,7 @@ def main():
 
         # Store filtering preferences in metadata
         metadata = {
-            'timestamp': "2025-06-14 16:44:31",
+            'timestamp': datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
             'user': "arullr001",
             'filtering_preferences': filters,
             'parameters': params
@@ -2353,6 +2594,15 @@ def main():
                 # Load and verify data
                 df = load_ohlc_data(file_path)
                 
+                # Analyze the data file before proceeding
+                print("\nAnalyzing input data file...")
+                data_analysis = analyze_ohlc_data(df)
+                print(f"Detected timeframe: {data_analysis['timeframe']}")
+                print(f"Date range: {data_analysis['start_date']} to {data_analysis['end_date']}")
+                print(f"Trading days: {data_analysis['trading_days']}")
+                print(f"Total candles: {data_analysis['total_candles']}")
+                print(f"Price range: {data_analysis['price_min']} to {data_analysis['price_max']}")
+                
                 # Verify 5-minute timeframe
                 time_diff = df.index[1] - df.index[0]
                 if pd.Timedelta(minutes=5) != time_diff:
@@ -2406,12 +2656,17 @@ def main():
                             final_results_df,
                             filters=filters
                         )
+                        
+                        # Generate detailed trade data for top combinations
+                        if not top_combinations.empty:
+                            print("\nGenerating detailed trade data for top combinations...")
+                            results_manager.save_detailed_trade_data(top_combinations, df, file_path)
                 else:
                     save_empty_results_file(
                         file_path, 
                         dir_manager.final_results_dir,
                         params,
-                        "2025-06-14 16:35:07",
+                        datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S'),
                         "arullr001",
                         len(param_combinations)
                     )
@@ -2423,7 +2678,7 @@ def main():
                 logging.getLogger('processing_errors').error(error_msg)
                 continue
         
-        #Generate TEXT Summary
+        # Generate TEXT Summary
         try:
             if 'results_manager' in locals() and 'params' in locals():
                 summary_file = results_manager.generate_summary_report(
@@ -2438,7 +2693,6 @@ def main():
         except Exception as e:
             print(f"Error generating summary: {str(e)}")
         
-        
         # Final cleanup and summary
         cleanup_memory()
         end_time = time.time()
@@ -2449,7 +2703,7 @@ def main():
         print("=" * 50)
         print(f"Results directory: {dir_manager.base_dir}")
         print(f"Total processing time: {timedelta(seconds=int(processing_time))}")
-        print(f"Started at: 2025-06-14 16:35:07")
+        print(f"Started at: {datetime.utcfromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"Completed at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}")
 
     except Exception as e:
@@ -2461,7 +2715,6 @@ def main():
     finally:
         if status_display:
             status_display.cleanup()
-
 
 
 if __name__ == "__main__":
