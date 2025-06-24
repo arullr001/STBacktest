@@ -20,10 +20,14 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Union, Any, Optional
 from itertools import product, combinations
 from functools import partial, lru_cache
+from PyQt5.QtWidgets import QStyleFactory
 import threading
 import queue
 import uuid
 import concurrent.futures
+import matplotlib.dates as mdates
+import matplotlib.ticker as mticker
+
 # Add to the existing imports section:
 from collections import Counter
 from copy import deepcopy
@@ -74,13 +78,15 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import seaborn as sns
 
+
 # GUI Framework - PyQt5
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QTabWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QLineEdit, QComboBox, QCheckBox, QSpinBox, QDoubleSpinBox,
     QFileDialog, QMessageBox, QProgressBar, QTableWidget, QTableWidgetItem,
     QSplitter, QFrame, QGroupBox, QFormLayout, QSizePolicy, QTextEdit, QMenu,
-    QAction, QToolBar, QStatusBar, QDockWidget, QListWidget, QScrollArea
+    QAction, QToolBar, QStatusBar, QDockWidget, QListWidget, QScrollArea,
+    QStyleFactory, QGridLayout, QInputDialog, QProgressDialog
 )
 from PyQt5.QtCore import (
     Qt, QThread, pyqtSignal, pyqtSlot, QTimer, QSettings, QSize, QRect, QPoint, QUrl
@@ -88,6 +94,7 @@ from PyQt5.QtCore import (
 from PyQt5.QtGui import (
     QIcon, QPixmap, QColor, QFont, QPalette, QDesktopServices, QTextCursor
 )
+
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
@@ -605,7 +612,10 @@ class LogManager:
                 f.write(f"{entry['time']} - {entry['message']}\n")
         
         return output_file
-
+ 
+    def shutdown(self):
+        """Clean up logging resources"""
+        logging.shutdown()
 
 # ==============================================================================
 # DATA MANAGEMENT
@@ -718,28 +728,28 @@ class DataLoader:
     def _process_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """Process loaded DataFrame to standardize column names and format"""
         self._log('debug', f"Processing DataFrame with shape: {df.shape}")
-        
+    
         # Map columns to standard names
         column_mapping = {}
         date_col = None
         time_col = None
-        
+    
         # Identify columns based on common naming patterns
         for col in df.columns:
             col_lower = col.lower()
-            
+        
             # OHLC columns
-            if col in ['o', 'open'] or 'open' in col_lower:
+            if col in ['o', 'O', 'open'] or 'open' in col_lower:
                 column_mapping[col] = 'open'
-            elif col in ['h', 'high'] or 'high' in col_lower:
+            elif col in ['h', 'H', 'high'] or 'high' in col_lower:
                 column_mapping[col] = 'high'
-            elif col in ['l', 'low'] or 'low' in col_lower:
+            elif col in ['l', 'L', 'low'] or 'low' in col_lower:
                 column_mapping[col] = 'low'
-            elif col in ['c', 'close'] or 'close' in col_lower:
+            elif col in ['c', 'C', 'close'] or 'close' in col_lower:
                 column_mapping[col] = 'close'
-            elif col in ['v', 'vol', 'volume'] or 'volume' in col_lower:
+            elif col in ['v', 'V', 'vol', 'volume'] or 'volume' in col_lower:
                 column_mapping[col] = 'volume'
-            
+        
             # Date/time columns
             elif 'date' in col_lower and 'datetime' not in col_lower:
                 date_col = col
@@ -747,13 +757,13 @@ class DataLoader:
                 time_col = col
             elif any(x in col_lower for x in ['datetime', 'timestamp']):
                 column_mapping[col] = 'datetime'
-        
+    
         self._log('debug', f"Column mapping: {column_mapping}")
         self._log('debug', f"Date column: {date_col}, Time column: {time_col}")
-        
+    
         # Apply column mapping
         df = df.rename(columns=column_mapping)
-        
+    
         # Handle datetime creation if needed
         if 'datetime' not in df.columns:
             if date_col and time_col:
@@ -771,36 +781,35 @@ class DataLoader:
             elif date_col:
                 self._log('debug', f"Creating datetime from {date_col}")
                 df['datetime'] = pd.to_datetime(df[date_col], errors='coerce')
-        
+    
         # Check for required columns
         required_cols = ['open', 'high', 'low', 'close', 'datetime']
         missing_cols = [col for col in required_cols if col not in df.columns]
-        
+    
         if missing_cols:
             self._log('error', f"Missing required columns: {missing_cols}")
             raise ValueError(f"Could not find all required columns. Missing: {missing_cols}")
-        
+    
         # Convert numeric columns
         numeric_cols = ['open', 'high', 'low', 'close']
         for col in numeric_cols:
             df[col] = pd.to_numeric(df[col], errors='coerce')
-        
+    
         # Convert volume if available
         if 'volume' in df.columns:
             df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
-        
+    
         # Set datetime as index
         df.set_index('datetime', inplace=True)
         df.sort_index(inplace=True)
-        
+    
         # Remove rows with NaN in critical columns
         df.dropna(subset=numeric_cols, inplace=True)
-        
+    
         self._log('info', f"Successfully processed data with shape: {df.shape}")
         self._log('debug', f"Date range: {df.index.min()} to {df.index.max()}")
-        
+    
         return df
-
 
 class DataAnalyzer:
     """Analyze OHLC data to detect characteristics and generate insights"""
@@ -6308,7 +6317,7 @@ Generated by SuperTrendAnalyzer v1.0 | {self.current_utc}
         
         return text
 
-    def set_plot_style():
+    def set_plot_style(self):
         """Set consistent style for all plots"""
         plt.style.use('seaborn-v0_8-whitegrid')
         plt.rcParams['figure.figsize'] = [12, 8]
@@ -8418,8 +8427,12 @@ along with comprehensive backtesting and parameter optimization tools.</p>
 
 def main():
     """Main entry point for the application"""
-    # Set up logging
-    log_manager = LogManager()
+    # Create a base directory for logs
+    base_dir = os.path.join(os.path.expanduser("~"), "SuperTrend_Logs")
+    os.makedirs(base_dir, exist_ok=True)
+    
+    # Set up logging with base directory
+    log_manager = LogManager(base_dir)
     log_manager.setup_logging()
     log_manager.info(f"Starting SuperTrend Backtester v{APP_VERSION}")
     
@@ -8445,7 +8458,6 @@ def main():
     finally:
         log_manager.info("Application shutting down")
         log_manager.shutdown()
-
 
 if __name__ == "__main__":
     main()
