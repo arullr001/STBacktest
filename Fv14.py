@@ -4588,7 +4588,7 @@ class ResultsStorage:
     
     def __init__(self, base_dir: str = None, log_manager: LogManager = None):
         self.log = log_manager
-        self.current_utc = "2025-06-24 13:21:57"  # Updated timestamp
+        self.current_utc = "2025-06-24 14:58:52"  # Updated timestamp
         self.current_user = "arullr001"           # Updated username
         
         # Set base directory for results storage
@@ -4621,7 +4621,8 @@ class ResultsStorage:
                 self.log.warning(message)
             elif level == 'error':
                 self.log.error(message)
-    
+
+
     def save_backtest_results(self, results: Dict[str, Any], name: str = None) -> str:
         """
         Save backtest results to disk
@@ -4650,8 +4651,8 @@ class ResultsStorage:
         
         # Add metadata
         serializable_results['_metadata'] = {
-            'saved_at': self.current_utc,
-            'saved_by': self.current_user,
+            'saved_at': "2025-06-24 15:00:41",  # Updated with current UTC time
+            'saved_by': "arullr001",  # Updated with current username
             'filename': filename
         }
         
@@ -4694,8 +4695,8 @@ class ResultsStorage:
         
         # Add metadata
         serializable_results['_metadata'] = {
-            'saved_at': self.current_utc,
-            'saved_by': self.current_user,
+            'saved_at': "2025-06-24 15:00:41",  # Updated with current UTC time
+            'saved_by': "arullr001",  # Updated with current username
             'filename': filename
         }
         
@@ -4709,7 +4710,7 @@ class ResultsStorage:
         except Exception as e:
             self._log('error', f"Error saving optimization results: {str(e)}")
             return None
-    
+
     def save_report(self, report_content: str, report_type: str, name: str = None) -> str:
         """
         Save a report to disk
@@ -4776,7 +4777,10 @@ class ResultsStorage:
             return filepath
         except Exception as e:
             self._log('error', f"Error saving chart: {str(e)}")
-            return None
+            return None    
+    
+    
+    
     
     def load_backtest_results(self, filename: str = None) -> Dict[str, Any]:
         """
@@ -4851,6 +4855,8 @@ class ResultsStorage:
         except Exception as e:
             self._log('error', f"Error loading optimization results: {str(e)}")
             return None
+
+
     
     def list_backtest_results(self) -> List[Dict[str, str]]:
         """
@@ -4901,7 +4907,7 @@ class ResultsStorage:
                 results.append({
                     'filename': filename,
                     'filepath': filepath,
-                    'date': data.get('_metadata', {}).get('saved_at', 'Unknown'),
+                    'date': data.get('_metadata', {}).get('saved_at', '2025-06-24 15:05:44'),
                     'name': self._extract_name_from_filename(filename),
                     'optimizer': data.get('metadata', {}).get('optimizer_type', 'Unknown'),
                     'best_params': data.get('best_parameters', {})
@@ -4932,7 +4938,8 @@ class ResultsStorage:
         except Exception as e:
             self._log('error', f"Error deleting file: {str(e)}")
             return False
-    
+
+
     def _prepare_for_serialization(self, data: Any) -> Any:
         """
         Prepare data structure for serialization to JSON
@@ -4979,9 +4986,10 @@ class ResultsStorage:
             return "Unknown"
             
         # Skip first part (backtest/optimization) and last parts (timestamp_uid.json)
-        return '_'.join(parts[1:-2])
-		
-		
+        return '_'.join(parts[1:-2])		
+
+
+
 class ReportGenerator:
     """
     Generates reports for backtest and optimization results
@@ -4989,8 +4997,8 @@ class ReportGenerator:
     
     def __init__(self, log_manager: LogManager = None):
         self.log = log_manager
-        self.current_utc = "2025-06-24 13:21:57"  # Updated timestamp
-        self.current_user = "arullr001"           # Updated username
+        self.current_utc = "2025-06-24 15:07:24"  # Updated with current UTC time
+        self.current_user = "arullr001"           # Updated with current username
     
     def _log(self, level: str, message: str):
         """Log message if log_manager is available"""
@@ -5003,7 +5011,8 @@ class ReportGenerator:
                 self.log.warning(message)
             elif level == 'error':
                 self.log.error(message)
-    
+
+
     def generate_backtest_report(self, results: Dict[str, Any], format_type: str = 'html') -> str:
         """
         Generate a comprehensive report for backtest results
@@ -5137,7 +5146,6 @@ class ReportGenerator:
         # Equity curve
         ax2 = fig.add_subplot(gs[1], sharex=ax1)
         equity_curve = results.get('performance', {}).get('equity_curve', pd.DataFrame())
-        
         if not equity_curve.empty and isinstance(equity_curve, dict) and '_type' in equity_curve and equity_curve['_type'] == 'DataFrame':
             # If equity curve is serialized DataFrame representation
             try:
@@ -5209,6 +5217,8 @@ class ReportGenerator:
         fig.tight_layout()
         
         return fig
+
+
 		
     def generate_chart_optimization(self, results: Dict[str, Any]) -> plt.Figure:
         """
@@ -5279,722 +5289,131 @@ class ReportGenerator:
             plt.setp(ax2.get_xticklabels(), rotation=45, ha='right')
         else:
             ax2.text(0.5, 0.5, "Correlation data not available", ha='center', va='center', transform=ax2.transAxes)
-        
-        # Parameter distribution chart
-        ax3 = fig.add_subplot(gs[1, :])
-        
-        # Collect data for box plots
-        boxplot_data = []
-        param_names = []
-        
-        for param in ['atr_length', 'factor', 'buffer_multiplier', 'hard_stop_distance']:
-            if param in param_analysis:
-                boxplot_data.append([
-                    param_analysis[param].get('min', 0),
-                    param_analysis[param].get('mean', 0) - param_analysis[param].get('std', 0),
-                    param_analysis[param].get('median', 0),
-                    param_analysis[param].get('mean', 0) + param_analysis[param].get('std', 0),
-                    param_analysis[param].get('max', 0)
-                ])
-                param_names.append(param)
-        
-        if boxplot_data:
-            ax3.boxplot(boxplot_data, labels=param_names, patch_artist=True, 
-                      boxprops=dict(facecolor='lightblue'),
-                      medianprops=dict(color='red'))
-            ax3.set_title('Parameter Distributions (Min, Q1, Median, Q3, Max)')
-            ax3.grid(True, alpha=0.3, axis='y')
+
+        # Parameter heatmaps for top 2 parameters
+        if 'parameter_heatmaps' in param_analysis and len(param_analysis['parameter_heatmaps']) >= 1:
+            heatmaps = param_analysis['parameter_heatmaps']
             
-            # Add optimal values
-            if 'optimal_combination' in param_analysis:
-                optimal = param_analysis['optimal_combination']
-                for i, param in enumerate(param_names):
-                    if param in optimal:
-                        ax3.scatter(i+1, optimal[param], color='green', marker='*', s=200, zorder=10)
+            # First heatmap (most important parameters)
+            ax3 = fig.add_subplot(gs[1, 0])
+            if len(heatmaps) > 0:
+                hm1 = heatmaps[0]
+                param1 = hm1['param_x']
+                param2 = hm1['param_y']
+                values = hm1['values']
+                
+                # Create heatmap matrix
+                x_labels = sorted(list(set([point[0] for point in values])))
+                y_labels = sorted(list(set([point[1] for point in values])))
+                z_matrix = np.zeros((len(y_labels), len(x_labels)))
+                
+                for x, y, z in values:
+                    x_idx = x_labels.index(x)
+                    y_idx = y_labels.index(y)
+                    z_matrix[y_idx, x_idx] = z
+                
+                # Plot heatmap
+                im = ax3.imshow(z_matrix, cmap='viridis', interpolation='nearest', aspect='auto')
+                ax3.set_xticks(np.arange(len(x_labels)))
+                ax3.set_yticks(np.arange(len(y_labels)))
+                ax3.set_xticklabels(x_labels)
+                ax3.set_yticklabels(y_labels)
+                ax3.set_xlabel(param1)
+                ax3.set_ylabel(param2)
+                ax3.set_title(f'Performance Heatmap: {param1} vs {param2}')
+                plt.colorbar(im, ax=ax3, label='Performance Metric')
+                
+                # Rotate x-axis labels if necessary
+                plt.setp(ax3.get_xticklabels(), rotation=45, ha='right')
+            else:
+                ax3.text(0.5, 0.5, "Heatmap data not available", ha='center', va='center', transform=ax3.transAxes)
+            
+            # Second heatmap (if available)
+            ax4 = fig.add_subplot(gs[1, 1])
+            if len(heatmaps) > 1:
+                hm2 = heatmaps[1]
+                param1 = hm2['param_x']
+                param2 = hm2['param_y']
+                values = hm2['values']
+                
+                # Create heatmap matrix
+                x_labels = sorted(list(set([point[0] for point in values])))
+                y_labels = sorted(list(set([point[1] for point in values])))
+                z_matrix = np.zeros((len(y_labels), len(x_labels)))
+                
+                for x, y, z in values:
+                    x_idx = x_labels.index(x)
+                    y_idx = y_labels.index(y)
+                    z_matrix[y_idx, x_idx] = z
+                
+                # Plot heatmap
+                im = ax4.imshow(z_matrix, cmap='viridis', interpolation='nearest', aspect='auto')
+                ax4.set_xticks(np.arange(len(x_labels)))
+                ax4.set_yticks(np.arange(len(y_labels)))
+                ax4.set_xticklabels(x_labels)
+                ax4.set_yticklabels(y_labels)
+                ax4.set_xlabel(param1)
+                ax4.set_ylabel(param2)
+                ax4.set_title(f'Performance Heatmap: {param1} vs {param2}')
+                plt.colorbar(im, ax=ax4, label='Performance Metric')
+                
+                # Rotate x-axis labels if necessary
+                plt.setp(ax4.get_xticklabels(), rotation=45, ha='right')
+            else:
+                ax4.text(0.5, 0.5, "Second heatmap not available", ha='center', va='center', transform=ax4.transAxes)
         else:
-            ax3.text(0.5, 0.5, "Parameter distribution data not available", ha='center', va='center', transform=ax3.transAxes)
+            # No heatmaps available
+            ax3 = fig.add_subplot(gs[1, :])
+            ax3.text(0.5, 0.5, "Parameter heatmap data not available", ha='center', va='center', transform=ax3.transAxes)
         
-        # Add title with metadata
-        optimizer_type = results.get('metadata', {}).get('optimizer_type', 'Unknown')
-        metric = results.get('metadata', {}).get('optimization_metric', 'Unknown')
+        # Add optimization summary
+        best_params = results.get('best_parameters', {})
+        best_metrics = results.get('best_metrics', {})
         
-        fig.suptitle(f"{optimizer_type.capitalize()} Optimization Results - Targeting {metric}", fontsize=16)
+        if best_params and best_metrics:
+            param_text = ", ".join([f"{k}={v}" for k, v in best_params.items()])
+            metric_value = list(best_metrics.values())[0] if best_metrics else "N/A"
+            metric_name = list(best_metrics.keys())[0] if best_metrics else "metric"
+            
+            summary_text = f"Best parameters: {param_text} | {metric_name}: {metric_value:.4f}"
+            fig.text(0.5, 0.01, summary_text, ha='center', fontsize=12, bbox=dict(facecolor='white', alpha=0.5))
         
-        # Add insights as text
-        if 'insights' in param_analysis:
-            insights = param_analysis['insights']
-            if insights and isinstance(insights, list):
-                insight_text = "\n".join(f"• {insight}" for insight in insights[:3])  # Show top 3 insights
-                fig.text(0.5, 0.01, insight_text, ha='center', fontsize=10, bbox=dict(facecolor='white', alpha=0.5))
+        # Adjust layout
+        fig.tight_layout()
         
         return fig
-    
-    def _generate_backtest_html_report(self, results: Dict[str, Any]) -> str:
-        """Generate HTML report for backtest results"""
-        # This method is implemented in the previous code section
-        # I'm omitting the implementation here to save space
-        pass
-    
-    def _generate_backtest_markdown_report(self, results: Dict[str, Any]) -> str:
-        """Generate Markdown report for backtest results"""
-        # This method is implemented in the previous code section
-        # I'm omitting the implementation here to save space
-        pass
-    
-    def _generate_backtest_text_report(self, results: Dict[str, Any]) -> str:
-        """Generate plain text report for backtest results"""
-        # This method is implemented in the previous code section
-        # I'm omitting the implementation here to save space
-        pass
 
-    def _generate_optimization_markdown_report(self, results: Dict[str, Any]) -> str:
-        """Generate Markdown report for optimization results"""
-        best_params = results.get('best_parameters', {})
-        best_performance = results.get('best_performance', {})
-        all_results = results.get('all_results', [])
-        meta = results.get('metadata', {})
-        param_analysis = results.get('parameter_analysis', {})
-        
-        markdown = f"""# SuperTrend Optimization Report
-
-Generated on: {self.current_utc} by {self.current_user}
-
-## Optimization Settings
-
-- **Optimization Metric:** {meta.get('optimization_metric', 'N/A')}
-- **Total Parameter Combinations:** {meta.get('total_combinations', 'N/A')}
-- **Valid Combinations:** {meta.get('valid_combinations', 'N/A')}
-- **Execution Time:** {format_time_delta(meta.get('execution_time_seconds', 0))}
-- **Data Period:** {meta.get('data_period', {}).get('start', 'N/A')} to {meta.get('data_period', {}).get('end', 'N/A')}
-
-## Best Parameter Set
-
-| Parameter | Value |
-|-----------|-------|
-| ATR Length | {best_params.get('atr_length', 'N/A')} |
-| Factor | {best_params.get('factor', 'N/A')} |
-| Buffer Multiplier | {best_params.get('buffer_multiplier', 'N/A')} |
-| Hard Stop Distance | {best_params.get('hard_stop_distance', 'N/A')} |
-
-### Performance with Best Parameters
-
-- **Total Trades:** {best_performance.get('trade_count', 0)}
-- **Win Rate:** {best_performance.get('win_rate', 0)*100:.2f}%
-- **Profit Factor:** {best_performance.get('profit_factor', 0):.2f}
-- **Total Return:** {best_performance.get('total_profit_pct', 0):.2f}%
-- **Max Drawdown:** {best_performance.get('max_drawdown', 0):.2f}%
-- **Sharpe Ratio:** {best_performance.get('sharpe_ratio', 0):.2f}
-"""
-        
-        # Add parameter analysis if available
-        if param_analysis:
-            markdown += """
-## Parameter Analysis
-
-"""
-            
-            # Add insights
-            if 'insights' in param_analysis:
-                markdown += "### Key Insights\n\n"
-                
-                for insight in param_analysis.get('insights', []):
-                    markdown += f"- {insight}\n"
-                
-                markdown += "\n"
-            
-            # Add optimal parameters
-            if 'optimal_combination' in param_analysis:
-                markdown += "### Recommended Optimal Parameter Combination\n\n"
-                markdown += "| Parameter | Optimal Value |\n"
-                markdown += "|-----------|---------------|\n"
-                
-                optimal = param_analysis['optimal_combination']
-                for param, value in optimal.items():
-                    markdown += f"| {param} | {value} |\n"
-                
-                markdown += "\n"
-            
-            # Add parameter statistics
-            markdown += "### Parameter Statistics\n\n"
-            markdown += "| Parameter | Mean | Median | Min | Max | Most Common | Importance | Correlation |\n"
-            markdown += "|-----------|------|--------|-----|-----|-------------|------------|-------------|\n"
-            
-            for param in ['atr_length', 'factor', 'buffer_multiplier', 'hard_stop_distance']:
-                if param in param_analysis:
-                    stats = param_analysis[param]
-                    importance = param_analysis.get('parameter_importance', {}).get(param, 0)
-                    correlation = param_analysis.get('correlations', {}).get(param, 0)
-                    
-                    markdown += f"| {param} | {stats.get('mean', 0):.2f} | {stats.get('median', 0):.2f} | {stats.get('min', 0):.2f} | {stats.get('max', 0):.2f} | {stats.get('most_common', 'N/A')} | {importance:.2f} | {correlation:.2f} |\n"
-            
-            markdown += "\n"
-        
-        # Add top combinations
-        if all_results:
-            markdown += "## Top Parameter Combinations\n\n"
-            markdown += "| Rank | ATR Length | Factor | Buffer | Stop | Trades | Win Rate | Profit Factor | Return |\n"
-            markdown += "|------|------------|--------|--------|------|--------|----------|--------------|--------|\n"
-            
-            # Sort results by the optimization metric
-            metric = meta.get('optimization_metric', 'profit_factor')
-            sorted_results = sorted(
-                all_results, 
-                key=lambda x: x['performance'].get(metric, 0), 
-                reverse=True
-            )
-            
-            # Show top 10 results for markdown (to keep it readable)
-            for i, result in enumerate(sorted_results[:10]):
-                params = result['parameters']
-                perf = result['performance']
-                
-                markdown += f"| {i+1} | {params.get('atr_length', 'N/A')} | {params.get('factor', 'N/A'):.2f} | {params.get('buffer_multiplier', 'N/A'):.2f} | {params.get('hard_stop_distance', 'N/A')} | {perf.get('trade_count', 0)} | {perf.get('win_rate', 0)*100:.1f}% | {perf.get('profit_factor', 0):.2f} | {perf.get('total_profit_pct', 0):.2f}% |\n"
-        
-        # Add footer
-        markdown += f"\n\n---\nGenerated by SuperTrend Backtester v{APP_VERSION} on {self.current_utc}"
-        
-        return markdown
-
-        
-    def _generate_optimization_html_report(self, results: Dict[str, Any]) -> str:
-        """Generate HTML report for optimization results"""
-        best_params = results.get('best_parameters', {})
-        best_performance = results.get('best_performance', {})
-        all_results = results.get('all_results', [])
-        meta = results.get('metadata', {})
-        param_analysis = results.get('parameter_analysis', {})
-        
-        html = f"""
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>SuperTrend Optimization Report</title>
-            <style>
-                body {{
-                    font-family: Arial, sans-serif;
-                    line-height: 1.6;
-                    margin: 0;
-                    padding: 20px;
-                    color: #333;
-                }}
-                h1, h2, h3 {{
-                    color: #2C3E50;
-                }}
-                .container {{
-                    max-width: 1200px;
-                    margin: 0 auto;
-                }}
-                .header {{
-                    background-color: #3498DB;
-                    color: white;
-                    padding: 20px;
-                    margin-bottom: 20px;
-                    border-radius: 5px;
-                }}
-                .section {{
-                    background-color: #fff;
-                    padding: 20px;
-                    margin-bottom: 20px;
-                    border-radius: 5px;
-                    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-                }}
-                table {{
-                    width: 100%;
-                    border-collapse: collapse;
-                    margin-bottom: 20px;
-                }}
-                th, td {{
-                    padding: 12px 15px;
-                    border-bottom: 1px solid #ddd;
-                    text-align: left;
-                }}
-                th {{
-                    background-color: #f8f9fa;
-                }}
-                .metric-box {{
-                    display: inline-block;
-                    width: calc(25% - 20px);
-                    margin: 10px;
-                    padding: 15px;
-                    background-color: #f8f9fa;
-                    border-radius: 5px;
-                    text-align: center;
-                    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-                }}
-                .metric-value {{
-                    font-size: 24px;
-                    font-weight: bold;
-                    margin: 10px 0;
-                }}
-                .metric-label {{
-                    font-size: 14px;
-                    color: #666;
-                }}
-                .footer {{
-                    text-align: center;
-                    margin-top: 30px;
-                    padding-top: 10px;
-                    border-top: 1px solid #eee;
-                    font-size: 12px;
-                    color: #777;
-                }}
-                .insight {{
-                    background-color: #f8f9fa;
-                    padding: 10px;
-                    border-left: 4px solid #3498DB;
-                    margin-bottom: 10px;
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <h1>SuperTrend Optimization Report</h1>
-                    <p>Generated on: {self.current_utc} by {self.current_user}</p>
-                </div>
-                
-                <div class="section">
-                    <h2>Optimization Settings</h2>
-                    <table>
-                        <tr>
-                            <td>Optimization Metric</td>
-                            <td>{meta.get('optimization_metric', 'N/A')}</td>
-                        </tr>
-                        <tr>
-                            <td>Total Parameter Combinations</td>
-                            <td>{meta.get('total_combinations', 'N/A')}</td>
-                        </tr>
-                        <tr>
-                            <td>Valid Combinations</td>
-                            <td>{meta.get('valid_combinations', 'N/A')}</td>
-                        </tr>
-                        <tr>
-                            <td>Execution Time</td>
-                            <td>{format_time_delta(meta.get('execution_time_seconds', 0))}</td>
-                        </tr>
-                        <tr>
-                            <td>Data Period</td>
-                            <td>{meta.get('data_period', {}).get('start', 'N/A')} to {meta.get('data_period', {}).get('end', 'N/A')}</td>
-                        </tr>
-                    </table>
-                </div>
-                
-                <div class="section">
-                    <h2>Best Parameter Set</h2>
-                    <table>
-                        <tr>
-                            <th>Parameter</th>
-                            <th>Value</th>
-                        </tr>
-                        <tr>
-                            <td>ATR Length</td>
-                            <td>{best_params.get('atr_length', 'N/A')}</td>
-                        </tr>
-                        <tr>
-                            <td>Factor</td>
-                            <td>{best_params.get('factor', 'N/A')}</td>
-                        </tr>
-                        <tr>
-                            <td>Buffer Multiplier</td>
-                            <td>{best_params.get('buffer_multiplier', 'N/A')}</td>
-                        </tr>
-                        <tr>
-                            <td>Hard Stop Distance</td>
-                            <td>{best_params.get('hard_stop_distance', 'N/A')}</td>
-                        </tr>
-                    </table>
-                    
-                    <h3>Performance with Best Parameters</h3>
-                    <div class="trade-summary">
-                        <div class="metric-box">
-                            <div class="metric-label">Total Trades</div>
-                            <div class="metric-value">{best_performance.get('trade_count', 0)}</div>
-                        </div>
-                        <div class="metric-box">
-                            <div class="metric-label">Win Rate</div>
-                            <div class="metric-value">{best_performance.get('win_rate', 0)*100:.2f}%</div>
-                        </div>
-                        <div class="metric-box">
-                            <div class="metric-label">Profit Factor</div>
-                            <div class="metric-value">{best_performance.get('profit_factor', 0):.2f}</div>
-                        </div>
-                        <div class="metric-box">
-                            <div class="metric-label">Total Return</div>
-                            <div class="metric-value">{best_performance.get('total_profit_pct', 0):.2f}%</div>
-                        </div>
-                        <div class="metric-box">
-                            <div class="metric-label">Max Drawdown</div>
-                            <div class="metric-value">{best_performance.get('max_drawdown', 0):.2f}%</div>
-                        </div>
-                        <div class="metric-box">
-                            <div class="metric-label">Sharpe Ratio</div>
-                            <div class="metric-value">{best_performance.get('sharpe_ratio', 0):.2f}</div>
-                        </div>
-                    </div>
-                </div>
-        """
-        
-        # Add parameter analysis if available
-        if param_analysis:
-            html += """
-                <div class="section">
-                    <h2>Parameter Analysis</h2>
-            """
-            
-            # Add insights
-            if 'insights' in param_analysis:
-                html += """
-                    <h3>Key Insights</h3>
-                """
-                
-                for insight in param_analysis.get('insights', []):
-                    html += f"""
-                    <div class="insight">{insight}</div>
-                    """
-            
-            # Add optimal parameters
-            if 'optimal_combination' in param_analysis:
-                html += """
-                    <h3>Recommended Optimal Parameter Combination</h3>
-                    <table>
-                        <tr>
-                            <th>Parameter</th>
-                            <th>Optimal Value</th>
-                        </tr>
-                """
-                
-                optimal = param_analysis['optimal_combination']
-                for param, value in optimal.items():
-                    html += f"""
-                        <tr>
-                            <td>{param}</td>
-                            <td>{value}</td>
-                        </tr>
-                    """
-                
-                html += """
-                    </table>
-                """
-            
-            # Add parameter statistics
-            html += """
-                <h3>Parameter Statistics</h3>
-                <table>
-                    <tr>
-                        <th>Parameter</th>
-                        <th>Mean</th>
-                        <th>Median</th>
-                        <th>Min</th>
-                        <th>Max</th>
-                        <th>Most Common</th>
-                        <th>Importance</th>
-                        <th>Correlation</th>
-                    </tr>
-            """
-            
-            for param in ['atr_length', 'factor', 'buffer_multiplier', 'hard_stop_distance']:
-                if param in param_analysis:
-                    stats = param_analysis[param]
-                    importance = param_analysis.get('parameter_importance', {}).get(param, 0)
-                    correlation = param_analysis.get('correlations', {}).get(param, 0)
-                    
-                    html += f"""
-                        <tr>
-                            <td>{param}</td>
-                            <td>{stats.get('mean', 0):.2f}</td>
-                            <td>{stats.get('median', 0):.2f}</td>
-                            <td>{stats.get('min', 0):.2f}</td>
-                            <td>{stats.get('max', 0):.2f}</td>
-                            <td>{stats.get('most_common', 'N/A')}</td>
-                            <td>{importance:.2f}</td>
-                            <td>{correlation:.2f}</td>
-                        </tr>
-                    """
-            
-            html += """
-                </table>
-            </div>
-            """
-        
-        # Add top combinations
-        if all_results:
-            html += """
-                <div class="section">
-                    <h2>Top Parameter Combinations</h2>
-                    <table>
-                        <tr>
-                            <th>Rank</th>
-                            <th>ATR Length</th>
-                            <th>Factor</th>
-                            <th>Buffer</th>
-                            <th>Stop</th>
-                            <th>Trades</th>
-                            <th>Win Rate</th>
-                            <th>Profit Factor</th>
-                            <th>Return</th>
-                        </tr>
-            """
-            
-            # Sort results by the optimization metric
-            metric = meta.get('optimization_metric', 'profit_factor')
-            sorted_results = sorted(
-                all_results, 
-                key=lambda x: x['performance'].get(metric, 0), 
-                reverse=True
-            )
-            
-            # Show top 20 results
-            for i, result in enumerate(sorted_results[:20]):
-                params = result['parameters']
-                perf = result['performance']
-                
-                html += f"""
-                    <tr>
-                        <td>{i+1}</td>
-                        <td>{params.get('atr_length', 'N/A')}</td>
-                        <td>{params.get('factor', 'N/A')}</td>
-                        <td>{params.get('buffer_multiplier', 'N/A')}</td>
-                        <td>{params.get('hard_stop_distance', 'N/A')}</td>
-                        <td>{perf.get('trade_count', 0)}</td>
-                        <td>{perf.get('win_rate', 0)*100:.2f}%</td>
-                        <td>{perf.get('profit_factor', 0):.2f}</td>
-                        <td>{perf.get('total_profit_pct', 0):.2f}%</td>
-                    </tr>
-                """
-            
-            html += """
-                    </table>
-                </div>
-            """
-        
-        # Close the HTML
-        html += f"""
-                <div class="footer">
-                    <p>Generated by SuperTrend Backtester v{APP_VERSION} on {self.current_utc}</p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
-        
-        return html
-		
-	    def _generate_optimization_markdown_report(self, results: Dict[str, Any]) -> str:
-        """Generate Markdown report for optimization results"""
-        best_params = results.get('best_parameters', {})
-        best_performance = results.get('best_performance', {})
-        all_results = results.get('all_results', [])
-        meta = results.get('metadata', {})
-        param_analysis = results.get('parameter_analysis', {})
-        
-        markdown = f"""# SuperTrend Optimization Report
-
-Generated on: {self.current_utc} by {self.current_user}
-
-## Optimization Settings
-
-- **Optimization Metric:** {meta.get('optimization_metric', 'N/A')}
-- **Total Parameter Combinations:** {meta.get('total_combinations', 'N/A')}
-- **Valid Combinations:** {meta.get('valid_combinations', 'N/A')}
-- **Execution Time:** {format_time_delta(meta.get('execution_time_seconds', 0))}
-- **Data Period:** {meta.get('data_period', {}).get('start', 'N/A')} to {meta.get('data_period', {}).get('end', 'N/A')}
-
-## Best Parameter Set
-
-| Parameter | Value |
-|-----------|-------|
-| ATR Length | {best_params.get('atr_length', 'N/A')} |
-| Factor | {best_params.get('factor', 'N/A')} |
-| Buffer Multiplier | {best_params.get('buffer_multiplier', 'N/A')} |
-| Hard Stop Distance | {best_params.get('hard_stop_distance', 'N/A')} |
-
-### Performance with Best Parameters
-
-- **Total Trades:** {best_performance.get('trade_count', 0)}
-- **Win Rate:** {best_performance.get('win_rate', 0)*100:.2f}%
-- **Profit Factor:** {best_performance.get('profit_factor', 0):.2f}
-- **Total Return:** {best_performance.get('total_profit_pct', 0):.2f}%
-- **Max Drawdown:** {best_performance.get('max_drawdown', 0):.2f}%
-- **Sharpe Ratio:** {best_performance.get('sharpe_ratio', 0):.2f}
-"""
-        
-        # Add parameter analysis if available
-        if param_analysis:
-            markdown += """
-## Parameter Analysis
-
-"""
-            
-            # Add insights
-            if 'insights' in param_analysis:
-                markdown += "### Key Insights\n\n"
-                
-                for insight in param_analysis.get('insights', []):
-                    markdown += f"- {insight}\n"
-                
-                markdown += "\n"
-            
-            # Add optimal parameters
-            if 'optimal_combination' in param_analysis:
-                markdown += "### Recommended Optimal Parameter Combination\n\n"
-                markdown += "| Parameter | Optimal Value |\n"
-                markdown += "|-----------|---------------|\n"
-                
-                optimal = param_analysis['optimal_combination']
-                for param, value in optimal.items():
-                    markdown += f"| {param} | {value} |\n"
-                
-                markdown += "\n"
-            
-            # Add parameter statistics
-            markdown += "### Parameter Statistics\n\n"
-            markdown += "| Parameter | Mean | Median | Min | Max | Most Common | Importance | Correlation |\n"
-            markdown += "|-----------|------|--------|-----|-----|-------------|------------|-------------|\n"
-            
-            for param in ['atr_length', 'factor', 'buffer_multiplier', 'hard_stop_distance']:
-                if param in param_analysis:
-                    stats = param_analysis[param]
-                    importance = param_analysis.get('parameter_importance', {}).get(param, 0)
-                    correlation = param_analysis.get('correlations', {}).get(param, 0)
-                    
-                    markdown += f"| {param} | {stats.get('mean', 0):.2f} | {stats.get('median', 0):.2f} | {stats.get('min', 0):.2f} | {stats.get('max', 0):.2f} | {stats.get('most_common', 'N/A')} | {importance:.2f} | {correlation:.2f} |\n"
-            
-            markdown += "\n"
-        
-        # Add top combinations
-        if all_results:
-            markdown += "## Top Parameter Combinations\n\n"
-            markdown += "| Rank | ATR Length | Factor | Buffer | Stop | Trades | Win Rate | Profit Factor | Return |\n"
-            markdown += "|------|------------|--------|--------|------|--------|----------|--------------|--------|\n"
-            
-            # Sort results by the optimization metric
-            metric = meta.get('optimization_metric', 'profit_factor')
-            sorted_results = sorted(
-                all_results, 
-                key=lambda x: x['performance'].get(metric, 0), 
-                reverse=True
-            )
-            
-            # Show top 10 results for markdown (to keep it readable)
-            for i, result in enumerate(sorted_results[:10]):
-                params = result['parameters']
-                perf = result['performance']
-                
-                markdown += f"| {i+1} | {params.get('atr_length', 'N/A')} | {params.get('factor', 'N/A')} | {params.get('buffer_multiplier', 'N/A')} | {params.get('hard_stop_distance', 'N/A')} | {perf.get('trade_count', 0)} | {perf.get('win_rate', 0)*100:.2f}% | {perf.get('profit_factor', 0):.2f} | {perf.get('total_profit_pct', 0):.2f}% |\n"
-        
-        # Add footer
-        markdown += f"\n\n---\nGenerated by SuperTrend Backtester v{APP_VERSION} on {self.current_utc}"
-        
-        return markdown
-    
-    def _generate_optimization_text_report(self, results: Dict[str, Any]) -> str:
-        """Generate plain text report for optimization results"""
-        best_params = results.get('best_parameters', {})
-        best_performance = results.get('best_performance', {})
-        all_results = results.get('all_results', [])
-        meta = results.get('metadata', {})
-        param_analysis = results.get('parameter_analysis', {})
-        
-        text = f"""
-=======================================================================
-                   SUPERTREND OPTIMIZATION REPORT
-=======================================================================
-Generated on: {self.current_utc} by {self.current_user}
-
------------------------------------------------------------------------
-OPTIMIZATION SETTINGS
------------------------------------------------------------------------
-Optimization Metric:      {meta.get('optimization_metric', 'N/A')}
-Total Combinations:       {meta.get('total_combinations', 'N/A')}
-Valid Combinations:       {meta.get('valid_combinations', 'N/A')}
-Execution Time:           {format_time_delta(meta.get('execution_time_seconds', 0))}
-Data Period:              {meta.get('data_period', {}).get('start', 'N/A')} to {meta.get('data_period', {}).get('end', 'N/A')}
-
------------------------------------------------------------------------
-BEST PARAMETER SET
------------------------------------------------------------------------
-ATR Length:               {best_params.get('atr_length', 'N/A')}
-Factor:                   {best_params.get('factor', 'N/A')}
-Buffer Multiplier:        {best_params.get('buffer_multiplier', 'N/A')}
-Hard Stop Distance:       {best_params.get('hard_stop_distance', 'N/A')}
-
-Performance with Best Parameters:
-- Total Trades:           {best_performance.get('trade_count', 0)}
-- Win Rate:               {best_performance.get('win_rate', 0)*100:.2f}%
-- Profit Factor:          {best_performance.get('profit_factor', 0):.2f}
-- Total Return:           {best_performance.get('total_profit_pct', 0):.2f}%
-- Max Drawdown:           {best_performance.get('max_drawdown', 0):.2f}%
-- Sharpe Ratio:           {best_performance.get('sharpe_ratio', 0):.2f}
-"""
-        
-        # Add parameter analysis if available
-        if param_analysis and 'insights' in param_analysis:
-            text += """
------------------------------------------------------------------------
-KEY INSIGHTS
------------------------------------------------------------------------
-"""
-            for insight in param_analysis.get('insights', []):
-                text += f"- {insight}\n"
-        
-        # Add optimal parameters
-        if param_analysis and 'optimal_combination' in param_analysis:
-            text += """
------------------------------------------------------------------------
-RECOMMENDED OPTIMAL PARAMETER COMBINATION
------------------------------------------------------------------------
-"""
-            optimal = param_analysis['optimal_combination']
-            for param, value in optimal.items():
-                text += f"{param}: {value}\n"
-        
-        # Add top combinations
-        if all_results:
-            text += f"""
------------------------------------------------------------------------
-TOP PARAMETER COMBINATIONS (Top {min(5, len(all_results))} of {len(all_results)})
------------------------------------------------------------------------
-Rank | ATR | Factor | Buffer | Stop | Trades | Win Rate | P.Factor | Return 
-"""
-            
-            # Sort results by the optimization metric
-            metric = meta.get('optimization_metric', 'profit_factor')
-            sorted_results = sorted(
-                all_results, 
-                key=lambda x: x['performance'].get(metric, 0), 
-                reverse=True
-            )
-            
-            # Show top 5 results for text report (keep it simple)
-            for i, result in enumerate(sorted_results[:5]):
-                params = result['parameters']
-                perf = result['performance']
-                
-                text += f"{i+1:4} | {params.get('atr_length', 'N/A'):3} | {params.get('factor', 'N/A'):6.2f} | {params.get('buffer_multiplier', 'N/A'):6.2f} | {params.get('hard_stop_distance', 'N/A'):4} | {perf.get('trade_count', 0):6} | {perf.get('win_rate', 0)*100:8.2f}% | {perf.get('profit_factor', 0):8.2f} | {perf.get('total_profit_pct', 0):6.2f}%\n"
-        
-        # Add footer
-        text += f"""
-=======================================================================
-Generated by SuperTrend Backtester v{APP_VERSION}
-"""
-        
-        return text
+ 
         
     def _generate_backtest_html_report(self, results: Dict[str, Any]) -> str:
         """Generate HTML report for backtest results"""
+        self._log('debug', "Generating HTML backtest report")
+        
+        # Extract metadata
+        metadata = results.get('_metadata', {})
+        saved_at = metadata.get('saved_at', self.current_utc)
+        saved_by = metadata.get('saved_by', self.current_user)
+        
+        # Extract parameters
         params = results.get('parameters', {})
+        atr_length = params.get('atr_length', 0)
+        factor = params.get('factor', 0)
+        buffer_multiplier = params.get('buffer_multiplier', 0)
+        
+        # Extract performance metrics
         performance = results.get('performance', {})
+        trade_count = performance.get('trade_count', 0)
+        win_rate = performance.get('win_rate', 0) * 100  # Convert to percentage
+        profit_factor = performance.get('profit_factor', 0)
+        total_profit = performance.get('total_profit_pct', 0)
+        max_drawdown = performance.get('max_drawdown', 0)
+        sharpe_ratio = performance.get('sharpe_ratio', 0)
+        sortino_ratio = performance.get('sortino_ratio', 0)
+        
+        # Extract trades
         trades = results.get('trades', [])
-        meta = results.get('metadata', {})
         
-        # Convert trade objects to dictionaries if necessary
-        if trades and not isinstance(trades[0], dict):
-            trades_list = [t.to_dict() for t in trades]
-        else:
-            trades_list = trades
-        
+        # Start building HTML
         html = f"""
         <!DOCTYPE html>
         <html lang="en">
@@ -6006,344 +5425,200 @@ Generated by SuperTrend Backtester v{APP_VERSION}
                 body {{
                     font-family: Arial, sans-serif;
                     line-height: 1.6;
-                    margin: 0;
-                    padding: 20px;
                     color: #333;
-                }}
-                h1, h2, h3 {{
-                    color: #2C3E50;
-                }}
-                .container {{
                     max-width: 1200px;
                     margin: 0 auto;
+                    padding: 20px;
+                }}
+                h1, h2, h3 {{
+                    color: #2c3e50;
                 }}
                 .header {{
-                    background-color: #3498DB;
-                    color: white;
-                    padding: 20px;
-                    margin-bottom: 20px;
+                    margin-bottom: 30px;
+                }}
+                .summary {{
+                    display: flex;
+                    flex-wrap: wrap;
+                    margin: 20px 0;
+                    padding: 15px;
+                    background-color: #f8f9fa;
                     border-radius: 5px;
                 }}
-                .section {{
-                    background-color: #fff;
-                    padding: 20px;
-                    margin-bottom: 20px;
-                    border-radius: 5px;
-                    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+                .metric {{
+                    flex: 1;
+                    min-width: 200px;
+                    margin: 10px;
+                }}
+                .metric h3 {{
+                    margin-bottom: 5px;
+                    font-size: 16px;
+                }}
+                .metric p {{
+                    font-size: 20px;
+                    font-weight: bold;
+                    margin: 5px 0;
+                }}
+                .positive {{
+                    color: green;
+                }}
+                .negative {{
+                    color: red;
                 }}
                 table {{
                     width: 100%;
                     border-collapse: collapse;
-                    margin-bottom: 20px;
+                    margin: 20px 0;
                 }}
                 th, td {{
                     padding: 12px 15px;
-                    border-bottom: 1px solid #ddd;
                     text-align: left;
+                    border-bottom: 1px solid #ddd;
                 }}
                 th {{
-                    background-color: #f8f9fa;
+                    background-color: #f2f2f2;
                 }}
-                .metric-box {{
-                    display: inline-block;
-                    width: calc(25% - 20px);
-                    margin: 10px;
-                    padding: 15px;
-                    background-color: #f8f9fa;
-                    border-radius: 5px;
-                    text-align: center;
-                    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-                }}
-                .metric-value {{
-                    font-size: 24px;
-                    font-weight: bold;
-                    margin: 10px 0;
-                }}
-                .metric-label {{
-                    font-size: 14px;
-                    color: #666;
-                }}
-                .profit {{
-                    color: green;
-                }}
-                .loss {{
-                    color: red;
+                tr:hover {{
+                    background-color: #f5f5f5;
                 }}
                 .footer {{
-                    text-align: center;
                     margin-top: 30px;
-                    padding-top: 10px;
-                    border-top: 1px solid #eee;
                     font-size: 12px;
-                    color: #777;
+                    color: #666;
+                    text-align: center;
+                }}
+                .chart-placeholder {{
+                    background-color: #f8f9fa;
+                    border: 1px dashed #ccc;
+                    height: 400px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    margin: 20px 0;
                 }}
             </style>
         </head>
         <body>
-            <div class="container">
-                <div class="header">
-                    <h1>SuperTrend Backtest Report</h1>
-                    <p>Generated on: {self.current_utc} by {self.current_user}</p>
+            <div class="header">
+                <h1>SuperTrend Backtest Report</h1>
+                <p>Report generated on {self.current_utc} by {self.current_user}</p>
+                <p>Backtest saved on {saved_at} by {saved_by}</p>
+            </div>
+            
+            <h2>Strategy Configuration</h2>
+            <div class="summary">
+                <div class="metric">
+                    <h3>ATR Length</h3>
+                    <p>{atr_length}</p>
                 </div>
-                
-                <div class="section">
-                    <h2>Backtest Settings</h2>
-                    <table>
-                        <tr>
-                            <td>Data Period</td>
-                            <td>{meta.get('data_period', {}).get('start', 'N/A')} to {meta.get('data_period', {}).get('end', 'N/A')}</td>
-                        </tr>
-                        <tr>
-                            <td>Candle Count</td>
-                            <td>{meta.get('data_period', {}).get('candle_count', 'N/A')}</td>
-                        </tr>
-                        <tr>
-                            <td>Execution Time</td>
-                            <td>{format_time_delta(meta.get('execution_time_seconds', 0))}</td>
-                        </tr>
-                    </table>
-                    
-                    <h3>SuperTrend Parameters</h3>
-                    <table>
-                        <tr>
-                            <th>Parameter</th>
-                            <th>Value</th>
-                        </tr>
-                        <tr>
-                            <td>ATR Length</td>
-                            <td>{params.get('atr_length', 'N/A')}</td>
-                        </tr>
-                        <tr>
-                            <td>Factor</td>
-                            <td>{params.get('factor', 'N/A')}</td>
-                        </tr>
-                        <tr>
-                            <td>Buffer Multiplier</td>
-                            <td>{params.get('buffer_multiplier', 'N/A')}</td>
-                        </tr>
-                        <tr>
-                            <td>Hard Stop Distance</td>
-                            <td>{params.get('hard_stop_distance', 'N/A')}</td>
-                        </tr>
-                        <tr>
-                            <td>Time Exit (hours)</td>
-                            <td>{params.get('time_exit_hours', 'N/A')}</td>
-                        </tr>
-                    </table>
+                <div class="metric">
+                    <h3>Multiplier</h3>
+                    <p>{factor}</p>
                 </div>
-                
-                <div class="section">
-                    <h2>Performance Summary</h2>
-                    
-                    <div class="trade-summary">
-                        <div class="metric-box">
-                            <div class="metric-label">Total Trades</div>
-                            <div class="metric-value">{performance.get('trade_count', 0)}</div>
-                        </div>
-                        <div class="metric-box">
-                            <div class="metric-label">Win Rate</div>
-                            <div class="metric-value">{performance.get('win_rate', 0)*100:.2f}%</div>
-                        </div>
-                        <div class="metric-box">
-                            <div class="metric-label">Profit Factor</div>
-                            <div class="metric-value">{performance.get('profit_factor', 0):.2f}</div>
-                        </div>
-                        <div class="metric-box">
-                            <div class="metric-label">Total Return</div>
-                            <div class="metric-value">{performance.get('total_profit_pct', 0):.2f}%</div>
-                        </div>
-                        
-                        <div class="metric-box">
-                            <div class="metric-label">Max Drawdown</div>
-                            <div class="metric-value">{performance.get('max_drawdown', 0):.2f}%</div>
-                        </div>
-                        <div class="metric-box">
-                            <div class="metric-label">Sharpe Ratio</div>
-                            <div class="metric-value">{performance.get('sharpe_ratio', 0):.2f}</div>
-                        </div>
-                        <div class="metric-box">
-                            <div class="metric-label">Win/Loss</div>
-                            <div class="metric-value">{performance.get('winning_trades', 0)}/{performance.get('losing_trades', 0)}</div>
-                        </div>
-                        <div class="metric-box">
-                            <div class="metric-label">Avg Trade</div>
-                            <div class="metric-value">{performance.get('average_profit_pct', 0):.2f}%</div>
-                        </div>
-                    </div>
-                    
-                    <h3>Additional Metrics</h3>
-                    <table>
-                        <tr>
-                            <th>Metric</th>
-                            <th>Value</th>
-                        </tr>
-                        <tr>
-                            <td>Max Consecutive Wins</td>
-                            <td>{performance.get('max_consecutive_wins', 0)}</td>
-                        </tr>
-                        <tr>
-                            <td>Max Consecutive Losses</td>
-                            <td>{performance.get('max_consecutive_losses', 0)}</td>
-                        </tr>
-                        <tr>
-                            <td>Average Trade Duration</td>
-                            <td>{performance.get('avg_trade_duration', 0):.2f} hours</td>
-                        </tr>
-                        <tr>
-                            <td>Total Market Time</td>
-                            <td>{performance.get('total_market_time_hours', 0):.2f} hours</td>
-                        </tr>
-                        <tr>
-                            <td>Long Win Rate</td>
-                            <td>{performance.get('long_win_rate', 0)*100:.2f}%</td>
-                        </tr>
-                        <tr>
-                            <td>Short Win Rate</td>
-                            <td>{performance.get('short_win_rate', 0)*100:.2f}%</td>
-                        </tr>
-                    </table>
+                <div class="metric">
+                    <h3>Buffer Multiplier</h3>
+                    <p>{buffer_multiplier}</p>
                 </div>
+            </div>
+            
+            <h2>Performance Metrics</h2>
+            <div class="summary">
+                <div class="metric">
+                    <h3>Total Trades</h3>
+                    <p>{trade_count}</p>
+                </div>
+                <div class="metric">
+                    <h3>Win Rate</h3>
+                    <p>{win_rate:.2f}%</p>
+                </div>
+                <div class="metric">
+                    <h3>Profit Factor</h3>
+                    <p class="{'' if profit_factor <= 1 else 'positive'}">{profit_factor:.2f}</p>
+                </div>
+                <div class="metric">
+                    <h3>Total Return</h3>
+                    <p class="{'negative' if total_profit < 0 else 'positive'}">{total_profit:.2f}%</p>
+                </div>
+                <div class="metric">
+                    <h3>Max Drawdown</h3>
+                    <p class="negative">{max_drawdown:.2f}%</p>
+                </div>
+                <div class="metric">
+                    <h3>Sharpe Ratio</h3>
+                    <p class="{'' if sharpe_ratio < 1 else 'positive'}">{sharpe_ratio:.2f}</p>
+                </div>
+                <div class="metric">
+                    <h3>Sortino Ratio</h3>
+                    <p class="{'' if sortino_ratio < 1 else 'positive'}">{sortino_ratio:.2f}</p>
+                </div>
+            </div>
         """
         
-        # Add trade list if available
-        if trades_list and len(trades_list) > 0:
-            html += """
-                <div class="section">
-                    <h2>Trade List</h2>
-                    <table>
-                        <tr>
-                            <th>ID</th>
-                            <th>Type</th>
-                            <th>Entry Time</th>
-                            <th>Entry Price</th>
-                            <th>Exit Time</th>
-                            <th>Exit Price</th>
-                            <th>P/L %</th>
-                            <th>Duration (hrs)</th>
-                        </tr>
-            """
+        # Chart section (placeholder)
+        html += """
+            <h2>Backtest Analysis Charts</h2>
+            <div class="chart-placeholder">
+                <p>Chart images would be embedded here when viewing in the application</p>
+            </div>
+        """
+        
+        # Trade list
+        html += """
+            <h2>Trade List</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>Type</th>
+                        <th>Entry Time</th>
+                        <th>Entry Price</th>
+                        <th>Exit Time</th>
+                        <th>Exit Price</th>
+                        <th>Profit/Loss</th>
+                        <th>Profit %</th>
+                    </tr>
+                </thead>
+                <tbody>
+        """
+        
+        # Add trade rows
+        for i, trade in enumerate(trades[:100]):  # Limit to first 100 trades
+            entry_time = trade.get('entry_time', '')
+            entry_price = trade.get('entry_price', 0)
+            exit_time = trade.get('exit_time', '')
+            exit_price = trade.get('exit_price', 0)
+            profit = trade.get('profit', 0)
+            profit_pct = trade.get('profit_pct', 0) * 100  # Convert to percentage
+            position_type = trade.get('position_type', '')
             
-            # Add top 50 trades (to keep the report manageable)
-            for trade in trades_list[:50]:
-                profit_class = "profit" if trade.get('profit_pct', 0) > 0 else "loss"
-                
-                html += f"""
-                        <tr>
-                            <td>{trade.get('trade_id', 'N/A')}</td>
-                            <td>{trade.get('position_type', 'N/A').capitalize()}</td>
-                            <td>{trade.get('entry_time', 'N/A')}</td>
-                            <td>{trade.get('entry_price', 0):.2f}</td>
-                            <td>{trade.get('exit_time', 'N/A')}</td>
-                            <td>{trade.get('exit_price', 0):.2f}</td>
-                            <td class="{profit_class}">{trade.get('profit_pct', 0):.2f}%</td>
-                            <td>{trade.get('duration_hours', 0):.2f}</td>
-                        </tr>
-                """
+            profit_class = 'positive' if profit > 0 else 'negative' if profit < 0 else ''
             
-            if len(trades_list) > 50:
-                html += f"""
-                        <tr>
-                            <td colspan="8" style="text-align: center;">(Showing 50 of {len(trades_list)} trades)</td>
-                        </tr>
-                """
-            
-            html += """
-                    </table>
-                </div>
+            html += f"""
+                <tr>
+                    <td>{i+1}</td>
+                    <td>{position_type}</td>
+                    <td>{entry_time}</td>
+                    <td>{entry_price:.4f}</td>
+                    <td>{exit_time if exit_time else 'Open'}</td>
+                    <td>{exit_price:.4f if exit_price else '-'}</td>
+                    <td class="{profit_class}">{profit:.4f}</td>
+                    <td class="{profit_class}">{profit_pct:.2f}%</td>
+                </tr>
             """
         
-        # Add Monte Carlo section if available
-        if 'monte_carlo' in results and results['monte_carlo']:
-            mc = results['monte_carlo']
-            html += """
-                <div class="section">
-                    <h2>Monte Carlo Analysis</h2>
-            """
-            
-            if 'equity' in mc:
-                equity = mc['equity']
-                drawdown = mc.get('drawdown', {})
-                probability = mc.get('probability', {})
-                
-                html += f"""
-                    <h3>Equity Distribution</h3>
-                    <table>
-                        <tr>
-                            <th>Statistic</th>
-                            <th>Value</th>
-                        </tr>
-                        <tr>
-                            <td>Mean Final Equity</td>
-                            <td>{equity.get('mean', 0):.2f}</td>
-                        </tr>
-                        <tr>
-                            <td>Median Final Equity</td>
-                            <td>{equity.get('median', 0):.2f}</td>
-                        </tr>
-                        <tr>
-                            <td>5% Percentile (Worst Case)</td>
-                            <td>{equity.get('percentiles', {}).get('5', 0):.2f}</td>
-                        </tr>
-                        <tr>
-                            <td>95% Percentile (Best Case)</td>
-                            <td>{equity.get('percentiles', {}).get('95', 0):.2f}</td>
-                        </tr>
-                        <tr>
-                            <td>Standard Deviation</td>
-                            <td>{equity.get('std', 0):.2f}</td>
-                        </tr>
-                    </table>
-                    
-                    <h3>Drawdown Analysis</h3>
-                    <table>
-                        <tr>
-                            <th>Statistic</th>
-                            <th>Value</th>
-                        </tr>
-                        <tr>
-                            <td>Mean Max Drawdown</td>
-                            <td>{drawdown.get('mean', 0):.2f}%</td>
-                        </tr>
-                        <tr>
-                            <td>Median Max Drawdown</td>
-                            <td>{drawdown.get('median', 0):.2f}%</td>
-                        </tr>
-                        <tr>
-                            <td>Worst Drawdown (95% Percentile)</td>
-                            <td>{drawdown.get('percentiles', {}).get('95', 0):.2f}%</td>
-                        </tr>
-                    </table>
-                    
-                    <h3>Probability Analysis</h3>
-                    <table>
-                        <tr>
-                            <th>Outcome</th>
-                            <th>Probability</th>
-                        </tr>
-                        <tr>
-                            <td>Profitable</td>
-                            <td>{probability.get('profit', 0)*100:.2f}%</td>
-                        </tr>
-                        <tr>
-                            <td>Loss</td>
-                            <td>{probability.get('loss', 0)*100:.2f}%</td>
-                        </tr>
-                        <tr>
-                            <td>Break Even</td>
-                            <td>{probability.get('break_even', 0)*100:.2f}%</td>
-                        </tr>
-                    </table>
-                """
-            
-            html += """
-                </div>
-            """
+        # Close table and add footer
+        html += """
+                </tbody>
+            </table>
+        """
         
-        # Close the HTML
+        # Add additional notes if trade count > 100
+        if len(trades) > 100:
+            html += f"<p>Showing 100 of {len(trades)} trades. Export the full results for complete trade list.</p>"
+        
+        # Footer
         html += f"""
-                <div class="footer">
-                    <p>Generated by SuperTrend Backtester v{APP_VERSION} on {self.current_utc}</p>
-                </div>
+            <div class="footer">
+                <p>Generated by SuperTrendAnalyzer v1.0 | {self.current_utc}</p>
             </div>
         </body>
         </html>
@@ -6351,228 +5626,703 @@ Generated by SuperTrend Backtester v{APP_VERSION}
         
         return html
 
+
+    def _generate_optimization_html_report(self, results: Dict[str, Any]) -> str:
+        """Generate HTML report for optimization results"""
+        self._log('debug', "Generating HTML optimization report")
+        
+        # Extract metadata
+        metadata = results.get('_metadata', {})
+        saved_at = metadata.get('saved_at', '2025-06-24 15:28:21')  # Updated with current time
+        saved_by = metadata.get('saved_by', 'arullr001')  # Updated with current username
+        
+        # Extract optimization settings
+        opt_settings = results.get('optimization_settings', {})
+        optimizer_type = opt_settings.get('optimizer_type', 'Unknown')
+        iterations = opt_settings.get('iterations', 0)
+        fitness_function = opt_settings.get('fitness_function', 'Unknown')
+        parameter_space = opt_settings.get('parameter_space', {})
+        
+        # Extract best results
+        best_parameters = results.get('best_parameters', {})
+        best_metrics = results.get('best_metrics', {})
+        
+        # Extract top results
+        top_results = results.get('top_results', [])
+        
+        # Start building HTML
+        html = f"""
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>SuperTrend Optimization Report</title>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    line-height: 1.6;
+                    color: #333;
+                    max-width: 1200px;
+                    margin: 0 auto;
+                    padding: 20px;
+                }}
+                h1, h2, h3 {{
+                    color: #2c3e50;
+                }}
+                .header {{
+                    margin-bottom: 30px;
+                }}
+                .summary {{
+                    display: flex;
+                    flex-wrap: wrap;
+                    margin: 20px 0;
+                    padding: 15px;
+                    background-color: #f8f9fa;
+                    border-radius: 5px;
+                }}
+                .metric {{
+                    flex: 1;
+                    min-width: 200px;
+                    margin: 10px;
+                }}
+                .metric h3 {{
+                    margin-bottom: 5px;
+                    font-size: 16px;
+                }}
+                .metric p {{
+                    font-size: 20px;
+                    font-weight: bold;
+                    margin: 5px 0;
+                }}
+                .parameter-space {{
+                    margin: 20px 0;
+                }}
+                .parameter {{
+                    margin-bottom: 10px;
+                }}
+                .positive {{
+                    color: green;
+                }}
+                .negative {{
+                    color: red;
+                }}
+                table {{
+                    width: 100%;
+                    border-collapse: collapse;
+                    margin: 20px 0;
+                }}
+                th, td {{
+                    padding: 12px 15px;
+                    text-align: left;
+                    border-bottom: 1px solid #ddd;
+                }}
+                th {{
+                    background-color: #f2f2f2;
+                }}
+                tr:hover {{
+                    background-color: #f5f5f5;
+                }}
+                .footer {{
+                    margin-top: 30px;
+                    font-size: 12px;
+                    color: #666;
+                    text-align: center;
+                }}
+                .chart-placeholder {{
+                    background-color: #f8f9fa;
+                    border: 1px dashed #ccc;
+                    height: 400px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    margin: 20px 0;
+                }}
+                .insights {{
+                    background-color: #e9f7ef;
+                    padding: 15px;
+                    border-radius: 5px;
+                    margin: 20px 0;
+                }}
+                .insights ul {{
+                    margin-top: 10px;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h1>SuperTrend Optimization Report</h1>
+                <p>Report generated on {self.current_utc} by {self.current_user}</p>
+                <p>Optimization saved on {saved_at} by {saved_by}</p>
+            </div>
+            
+            <h2>Optimization Configuration</h2>
+            <div class="summary">
+                <div class="metric">
+                    <h3>Optimizer</h3>
+                    <p>{optimizer_type}</p>
+                </div>
+                <div class="metric">
+                    <h3>Iterations</h3>
+                    <p>{iterations}</p>
+                </div>
+                <div class="metric">
+                    <h3>Fitness Function</h3>
+                    <p>{fitness_function}</p>
+                </div>
+            </div>
+            
+            <h3>Parameter Space</h3>
+            <div class="parameter-space">
+        """
+        
+        
+        
+        # Add parameter space
+        for param_name, param_range in parameter_space.items():
+            if isinstance(param_range, list):
+                if len(param_range) == 3 and param_range[2] != 1:  # min, max, step
+                    html += f"""
+                    <div class="parameter">
+                        <strong>{param_name}</strong>: Range [{param_range[0]} to {param_range[1]}] with step {param_range[2]}
+                    </div>
+                    """
+                else:
+                    html += f"""
+                    <div class="parameter">
+                        <strong>{param_name}</strong>: {param_range}
+                    </div>
+                    """
+            else:
+                html += f"""
+                <div class="parameter">
+                    <strong>{param_name}</strong>: {param_range}
+                </div>
+                """
+        
+        # Best results
+        html += """
+            </div>
+            
+            <h2>Optimization Results</h2>
+            <h3>Best Parameters</h3>
+            <div class="summary">
+        """
+        
+        # Add best parameters
+        for param_name, param_value in best_parameters.items():
+            html += f"""
+            <div class="metric">
+                <h3>{param_name}</h3>
+                <p>{param_value}</p>
+            </div>
+            """
+        
+        # Best metrics
+        html += """
+            </div>
+            
+            <h3>Performance Metrics</h3>
+            <div class="summary">
+        """
+        
+        # Add best metrics
+        for metric_name, metric_value in best_metrics.items():
+            # Determine if metric is positive or negative
+            css_class = ''
+            if 'profit' in metric_name.lower() or 'return' in metric_name.lower():
+                css_class = 'positive' if metric_value > 0 else 'negative'
+            elif 'drawdown' in metric_name.lower():
+                css_class = 'negative'
+            elif 'sharpe' in metric_name.lower() or 'sortino' in metric_name.lower():
+                css_class = 'positive' if metric_value > 1 else ''
+                
+            html += f"""
+            <div class="metric">
+                <h3>{metric_name}</h3>
+                <p class="{css_class}">{metric_value:.4f}</p>
+            </div>
+            """
+        
+        # Chart section (placeholder)
+        html += """
+            </div>
+            
+            <h2>Optimization Analysis</h2>
+            <div class="chart-placeholder">
+                <p>Chart images would be embedded here when viewing in the application</p>
+            </div>
+        """
+                # Add insights section
+        param_analysis = results.get('parameter_analysis', {})
+        if param_analysis:
+            html += """
+            <h3>Parameter Insights</h3>
+            <div class="insights">
+                <ul>
+            """
+            
+            # Add insights based on parameter analysis
+            if 'parameter_importance' in param_analysis:
+                importance = param_analysis['parameter_importance']
+                most_important = max(importance.items(), key=lambda x: x[1])
+                html += f"""
+                <li>Parameter <strong>{most_important[0]}</strong> has the highest impact on performance.</li>
+                """
+            
+            if 'correlations' in param_analysis:
+                correlations = param_analysis['correlations']
+                # Find highest positive correlation
+                pos_corr = [(k, v) for k, v in correlations.items() if v > 0]
+                if pos_corr:
+                    highest_pos = max(pos_corr, key=lambda x: x[1])
+                    html += f"""
+                    <li>Increasing <strong>{highest_pos[0]}</strong> generally leads to better performance (correlation: {highest_pos[1]:.2f}).</li>
+                    """
+                
+                # Find highest negative correlation
+                neg_corr = [(k, v) for k, v in correlations.items() if v < 0]
+                if neg_corr:
+                    highest_neg = min(neg_corr, key=lambda x: x[1])
+                    html += f"""
+                    <li>Increasing <strong>{highest_neg[0]}</strong> generally leads to worse performance (correlation: {highest_neg[1]:.2f}).</li>
+                    """
+            
+            # Close insights
+            html += """
+                </ul>
+            </div>
+            """
+        
+        # Top results
+        html += """
+            <h3>Top Parameter Combinations</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Rank</th>
+        """
+        
+        # Add parameter column headers
+        if top_results and len(top_results) > 0:
+            # Get parameter names from the first result
+            param_names = list(top_results[0].get('parameters', {}).keys())
+            metric_names = list(top_results[0].get('metrics', {}).keys())
+            
+            # Add parameter headers
+            for param in param_names:
+                html += f"<th>{param}</th>"
+            
+            # Add metric headers
+            for metric in metric_names:
+                html += f"<th>{metric}</th>"
+            
+            html += """
+                    </tr>
+                </thead>
+                <tbody>
+            """
+            
+            # Add rows for top results
+            for i, result in enumerate(top_results[:10]):  # Top 10 results
+                params = result.get('parameters', {})
+                metrics = result.get('metrics', {})
+                
+                html += f"""
+                    <tr>
+                        <td>{i+1}</td>
+                """
+                
+                # Add parameter values
+                for param in param_names:
+                    html += f"<td>{params.get(param, '')}</td>"
+                
+                # Add metric values with formatting
+                for metric_name in metric_names:
+                    metric_value = metrics.get(metric_name, 0)
+                    
+                    # Determine CSS class
+                    css_class = ''
+                    if 'profit' in metric_name.lower() or 'return' in metric_name.lower():
+                        css_class = 'positive' if metric_value > 0 else 'negative'
+                    elif 'drawdown' in metric_name.lower():
+                        css_class = 'negative'
+                    elif 'sharpe' in metric_name.lower() or 'sortino' in metric_name.lower():
+                        css_class = 'positive' if metric_value > 1 else ''
+                    
+                    html += f"<td class='{css_class}'>{metric_value:.4f}</td>"
+                
+                html += "</tr>"
+        else:
+            html += """
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td colspan="99">No top results available</td>
+                    </tr>
+            """
+        
+        # Close table
+        html += """
+                </tbody>
+            </table>
+        """
+        
+        # Footer
+        html += f"""
+            <div class="footer">
+                <p>Generated by SuperTrendAnalyzer v1.0 | {self.current_utc}</p>
+            </div>
+        </body>
+        </html>
+        """
+        
+        return html
+
+    
     def _generate_backtest_markdown_report(self, results: Dict[str, Any]) -> str:
         """Generate Markdown report for backtest results"""
+        self._log('debug', "Generating Markdown backtest report")
+        
+        # Extract metadata
+        metadata = results.get('_metadata', {})
+        saved_at = metadata.get('saved_at', self.current_utc)
+        saved_by = metadata.get('saved_by', self.current_user)
+        
+        # Extract parameters
         params = results.get('parameters', {})
+        atr_length = params.get('atr_length', 0)
+        factor = params.get('factor', 0)
+        buffer_multiplier = params.get('buffer_multiplier', 0)
+        
+        # Extract performance metrics
         performance = results.get('performance', {})
+        trade_count = performance.get('trade_count', 0)
+        win_rate = performance.get('win_rate', 0) * 100  # Convert to percentage
+        profit_factor = performance.get('profit_factor', 0)
+        total_profit = performance.get('total_profit_pct', 0)
+        max_drawdown = performance.get('max_drawdown', 0)
+        sharpe_ratio = performance.get('sharpe_ratio', 0)
+        sortino_ratio = performance.get('sortino_ratio', 0)
+        
+        # Extract trades
         trades = results.get('trades', [])
-        meta = results.get('metadata', {})
         
-        markdown = f"""# SuperTrend Backtest Report
+        # Start building Markdown
+        md = f"""# SuperTrend Backtest Report
 
-Generated on: {self.current_utc} by {self.current_user}
+Report generated on {self.current_utc} by {self.current_user}  
+Backtest saved on {saved_at} by {saved_by}
 
-## Backtest Settings
+## Strategy Configuration
 
-- **Data Period:** {meta.get('data_period', {}).get('start', 'N/A')} to {meta.get('data_period', {}).get('end', 'N/A')}
-- **Candle Count:** {meta.get('data_period', {}).get('candle_count', 'N/A')}
-- **Execution Time:** {format_time_delta(meta.get('execution_time_seconds', 0))}
+- **ATR Length:** {atr_length}
+- **Multiplier:** {factor}
+- **Buffer Multiplier:** {buffer_multiplier}
 
-### SuperTrend Parameters
+## Performance Metrics
 
-| Parameter | Value |
-|-----------|-------|
-| ATR Length | {params.get('atr_length', 'N/A')} |
-| Factor | {params.get('factor', 'N/A')} |
-| Buffer Multiplier | {params.get('buffer_multiplier', 'N/A')} |
-| Hard Stop Distance | {params.get('hard_stop_distance', 'N/A')} |
-| Time Exit (hours) | {params.get('time_exit_hours', 'N/A')} |
+- **Total Trades:** {trade_count}
+- **Win Rate:** {win_rate:.2f}%
+- **Profit Factor:** {profit_factor:.2f}
+- **Total Return:** {total_profit:.2f}%
+- **Max Drawdown:** {max_drawdown:.2f}%
+- **Sharpe Ratio:** {sharpe_ratio:.2f}
+- **Sortino Ratio:** {sortino_ratio:.2f}
 
-## Performance Summary
-
-- **Total Trades:** {performance.get('trade_count', 0)}
-- **Win Rate:** {performance.get('win_rate', 0)*100:.2f}%
-- **Profit Factor:** {performance.get('profit_factor', 0):.2f}
-- **Total Return:** {performance.get('total_profit_pct', 0):.2f}%
-- **Max Drawdown:** {performance.get('max_drawdown', 0):.2f}%
-- **Sharpe Ratio:** {performance.get('sharpe_ratio', 0):.2f}
-
-### Additional Metrics
-
-| Metric | Value |
-|--------|-------|
-| Winning/Losing Trades | {performance.get('winning_trades', 0)}/{performance.get('losing_trades', 0)} |
-| Average Trade | {performance.get('average_profit_pct', 0):.2f}% |
-| Max Consecutive Wins | {performance.get('max_consecutive_wins', 0)} |
-| Max Consecutive Losses | {performance.get('max_consecutive_losses', 0)} |
-| Average Trade Duration | {performance.get('avg_trade_duration', 0):.2f} hours |
-| Long Win Rate | {performance.get('long_win_rate', 0)*100:.2f}% |
-| Short Win Rate | {performance.get('short_win_rate', 0)*100:.2f}% |
-"""
-        
-        # Add trade list if available
-        if trades and len(trades) > 0:
-            # Convert trade objects to dictionaries if necessary
-            if not isinstance(trades[0], dict):
-                trades_list = [t.to_dict() for t in trades]
-            else:
-                trades_list = trades
-                
-            markdown += """
 ## Trade List
 
-| ID | Type | Entry Time | Entry Price | Exit Time | Exit Price | P/L % | Duration |
-|----|------|------------|-------------|-----------|------------|-------|----------|
+| # | Type | Entry Time | Entry Price | Exit Time | Exit Price | Profit/Loss | Profit % |
+|---|------|------------|------------|-----------|-----------|------------|----------|
 """
-            
-            # Add top 20 trades (to keep the report manageable in markdown)
-            for trade in trades_list[:20]:
-                markdown += f"| {trade.get('trade_id', 'N/A')} | {trade.get('position_type', 'N/A').capitalize()} | {trade.get('entry_time', 'N/A')} | {trade.get('entry_price', 0):.2f} | {trade.get('exit_time', 'N/A')} | {trade.get('exit_price', 0):.2f} | {trade.get('profit_pct', 0):.2f}% | {trade.get('duration_hours', 0):.2f}h |\n"
-            
-            if len(trades_list) > 20:
-                markdown += f"\n*Showing 20 of {len(trades_list)} trades*\n"
         
-        # Add Monte Carlo section if available
-        if 'monte_carlo' in results and results['monte_carlo']:
-            mc = results['monte_carlo']
-            markdown += """
-## Monte Carlo Analysis
-"""
+        # Add trade rows
+        for i, trade in enumerate(trades[:50]):  # Limit to first 50 trades in markdown
+            entry_time = trade.get('entry_time', '')
+            entry_price = trade.get('entry_price', 0)
+            exit_time = trade.get('exit_time', '')
+            exit_price = trade.get('exit_price', 0)
+            profit = trade.get('profit', 0)
+            profit_pct = trade.get('profit_pct', 0) * 100  # Convert to percentage
+            position_type = trade.get('position_type', '')
             
-            if 'equity' in mc:
-                equity = mc['equity']
-                drawdown = mc.get('drawdown', {})
-                probability = mc.get('probability', {})
-                
-                markdown += """
-### Equity Distribution
-
-| Statistic | Value |
-|-----------|-------|
-"""
-                markdown += f"| Mean Final Equity | {equity.get('mean', 0):.2f} |\n"
-                markdown += f"| Median Final Equity | {equity.get('median', 0):.2f} |\n"
-                markdown += f"| 5% Percentile (Worst Case) | {equity.get('percentiles', {}).get('5', 0):.2f} |\n"
-                markdown += f"| 95% Percentile (Best Case) | {equity.get('percentiles', {}).get('95', 0):.2f} |\n"
-                
-                markdown += """
-### Drawdown Analysis
-
-| Statistic | Value |
-|-----------|-------|
-"""
-                markdown += f"| Mean Max Drawdown | {drawdown.get('mean', 0):.2f}% |\n"
-                markdown += f"| Median Max Drawdown | {drawdown.get('median', 0):.2f}% |\n"
-                markdown += f"| Worst Drawdown (95% Percentile) | {drawdown.get('percentiles', {}).get('95', 0):.2f}% |\n"
-                
-                markdown += """
-### Probability Analysis
-
-| Outcome | Probability |
-|---------|------------|
-"""
-                markdown += f"| Profitable | {probability.get('profit', 0)*100:.2f}% |\n"
-                markdown += f"| Loss | {probability.get('loss', 0)*100:.2f}% |\n"
+            md += f"| {i+1} | {position_type} | {entry_time} | {entry_price:.4f} | {exit_time if exit_time else 'Open'} | {exit_price:.4f if exit_price else '-'} | {profit:.4f} | {profit_pct:.2f}% |\n"
+        
+        # Add notes if trade count > 50
+        if len(trades) > 50:
+            md += f"\n*Showing 50 of {len(trades)} trades. Export the full results for complete trade list.*\n"
         
         # Add footer
-        markdown += f"\n\n---\nGenerated by SuperTrend Backtester v{APP_VERSION} on {self.current_utc}"
+        md += f"\n\n---\nGenerated by SuperTrendAnalyzer v1.0 | {self.current_utc}"
         
-        return markdown
+        return md
+
 
     def _generate_backtest_text_report(self, results: Dict[str, Any]) -> str:
         """Generate plain text report for backtest results"""
+        self._log('debug', "Generating plain text backtest report")
+        
+        # Extract metadata
+        metadata = results.get('_metadata', {})
+        saved_at = metadata.get('saved_at', self.current_utc)
+        saved_by = metadata.get('saved_by', self.current_user)
+        
+        # Extract parameters
         params = results.get('parameters', {})
+        atr_length = params.get('atr_length', 0)
+        factor = params.get('factor', 0)
+        buffer_multiplier = params.get('buffer_multiplier', 0)
+        
+        # Extract performance metrics
         performance = results.get('performance', {})
+        trade_count = performance.get('trade_count', 0)
+        win_rate = performance.get('win_rate', 0) * 100  # Convert to percentage
+        profit_factor = performance.get('profit_factor', 0)
+        total_profit = performance.get('total_profit_pct', 0)
+        max_drawdown = performance.get('max_drawdown', 0)
+        sharpe_ratio = performance.get('sharpe_ratio', 0)
+        sortino_ratio = performance.get('sortino_ratio', 0)
+        
+        # Extract trades
         trades = results.get('trades', [])
-        meta = results.get('metadata', {})
         
+        # Build text report - header
         text = f"""
-=======================================================================
-                     SUPERTREND BACKTEST REPORT
-=======================================================================
-Generated on: {self.current_utc} by {self.current_user}
+=============================================================
+                SUPERTREND BACKTEST REPORT
+=============================================================
+Report generated on {self.current_utc} by {self.current_user}
+Backtest saved on {saved_at} by {saved_by}
+=============================================================
 
------------------------------------------------------------------------
-BACKTEST SETTINGS
------------------------------------------------------------------------
-Data Period:              {meta.get('data_period', {}).get('start', 'N/A')} to {meta.get('data_period', {}).get('end', 'N/A')}
-Candle Count:             {meta.get('data_period', {}).get('candle_count', 'N/A')}
-Execution Time:           {format_time_delta(meta.get('execution_time_seconds', 0))}
+STRATEGY CONFIGURATION
+-------------------------------------------------------------
+ATR Length: {atr_length}
+Multiplier: {factor}
+Buffer Multiplier: {buffer_multiplier}
 
-SuperTrend Parameters:
-ATR Length:               {params.get('atr_length', 'N/A')}
-Factor:                   {params.get('factor', 'N/A')}
-Buffer Multiplier:        {params.get('buffer_multiplier', 'N/A')}
-Hard Stop Distance:       {params.get('hard_stop_distance', 'N/A')}
-Time Exit (hours):        {params.get('time_exit_hours', 'N/A')}
+PERFORMANCE METRICS
+-------------------------------------------------------------
+Total Trades: {trade_count}
+Win Rate: {win_rate:.2f}%
+Profit Factor: {profit_factor:.2f}
+Total Return: {total_profit:.2f}%
+Max Drawdown: {max_drawdown:.2f}%
+Sharpe Ratio: {sharpe_ratio:.2f}
+Sortino Ratio: {sortino_ratio:.2f}
 
------------------------------------------------------------------------
-PERFORMANCE SUMMARY
------------------------------------------------------------------------
-Total Trades:             {performance.get('trade_count', 0)}
-Win Rate:                 {performance.get('win_rate', 0)*100:.2f}%
-Profit Factor:            {performance.get('profit_factor', 0):.2f}
-Total Return:             {performance.get('total_profit_pct', 0):.2f}%
-Max Drawdown:             {performance.get('max_drawdown', 0):.2f}%
-Sharpe Ratio:             {performance.get('sharpe_ratio', 0):.2f}
-
-Winning/Losing Trades:    {performance.get('winning_trades', 0)}/{performance.get('losing_trades', 0)}
-Average Trade:            {performance.get('average_profit_pct', 0):.2f}%
-Max Consecutive Wins:     {performance.get('max_consecutive_wins', 0)}
-Max Consecutive Losses:   {performance.get('max_consecutive_losses', 0)}
-Average Trade Duration:   {performance.get('avg_trade_duration', 0):.2f} hours
-Long Win Rate:            {performance.get('long_win_rate', 0)*100:.2f}%
-Short Win Rate:           {performance.get('short_win_rate', 0)*100:.2f}%
+TRADE LIST
+-------------------------------------------------------------
 """
         
-        # Add trade list if available (limited to 10 for readability)
-        if trades and len(trades) > 0:
-            # Convert trade objects to dictionaries if necessary
-            if not isinstance(trades[0], dict):
-                trades_list = [t.to_dict() for t in trades]
-            else:
-                trades_list = trades
-                
-            text += f"""
------------------------------------------------------------------------
-TRADE LIST (Top 10 of {len(trades_list)})
------------------------------------------------------------------------
-ID   Type    Entry Time           Price    Exit Time            Price    P/L %    Duration
-"""
-            
-            # Add top 10 trades for text report
-            for trade in trades_list[:10]:
-                text += f"{trade.get('trade_id', 'N/A'):<4} {trade.get('position_type', 'N/A')[:5]:<6} {str(trade.get('entry_time', 'N/A'))[:19]:<19} {trade.get('entry_price', 0):<8.2f} {str(trade.get('exit_time', 'N/A'))[:19]:<19} {trade.get('exit_price', 0):<8.2f} {trade.get('profit_pct', 0):<8.2f}% {trade.get('duration_hours', 0):<8.2f}h\n"
+        # Add column headers for trades
+        text += f"{'#':3s} {'TYPE':6s} {'ENTRY TIME':20s} {'ENTRY PRICE':12s} {'EXIT TIME':20s} {'EXIT PRICE':12s} {'PROFIT':10s} {'PROFIT %':10s}\n"
+        text += "-" * 95 + "\n"
         
-        # Add Monte Carlo results if available
-        if 'monte_carlo' in results and results['monte_carlo']:
-            mc = results['monte_carlo']
-            text += """
------------------------------------------------------------------------
-MONTE CARLO ANALYSIS
------------------------------------------------------------------------
-"""
+        # Add trade rows
+        for i, trade in enumerate(trades[:30]):  # Limit to first 30 trades in text report
+            entry_time = trade.get('entry_time', '')[:19]  # Truncate microseconds if present
+            entry_price = trade.get('entry_price', 0)
+            exit_time = trade.get('exit_time', '')[:19] if trade.get('exit_time', '') else 'Open'
+            exit_price = trade.get('exit_price', 0)
+            profit = trade.get('profit', 0)
+            profit_pct = trade.get('profit_pct', 0) * 100  # Convert to percentage
+            position_type = trade.get('position_type', '')[:4]  # Truncate to 'LONG' or 'SHOR'
             
-            if 'equity' in mc:
-                equity = mc['equity']
-                drawdown = mc.get('drawdown', {})
-                probability = mc.get('probability', {})
-                
-                text += f"""
-Equity Distribution:
-Mean Final Equity:         {equity.get('mean', 0):.2f}
-Median Final Equity:       {equity.get('median', 0):.2f}
-5% Percentile (Worst):     {equity.get('percentiles', {}).get('5', 0):.2f}
-95% Percentile (Best):     {equity.get('percentiles', {}).get('95', 0):.2f}
-
-Drawdown Analysis:
-Mean Max Drawdown:         {drawdown.get('mean', 0):.2f}%
-Median Max Drawdown:       {drawdown.get('median', 0):.2f}%
-Worst Drawdown (95%):      {drawdown.get('percentiles', {}).get('95', 0):.2f}%
-
-Probability Analysis:
-Probability of Profit:     {probability.get('profit', 0)*100:.2f}%
-Probability of Loss:       {probability.get('loss', 0)*100:.2f}%
-"""
+            text += f"{i+1:3d} {position_type:6s} {entry_time:20s} {entry_price:12.4f} {exit_time:20s} "
+            text += f"{exit_price:12.4f if exit_price else 0:12.4f} {profit:10.4f} {profit_pct:10.2f}%\n"
+        
+        # Add notes if trade count > 30
+        if len(trades) > 30:
+            text += f"\nShowing 30 of {len(trades)} trades. Export the full results for complete trade list.\n"
         
         # Add footer
         text += f"""
-=======================================================================
-Generated by SuperTrend Backtester v{APP_VERSION} on {self.current_utc}
+=============================================================
+Generated by SuperTrendAnalyzer v1.0 | {self.current_utc}
+=============================================================
 """
         
         return text
+
+
+    def _generate_optimization_text_report(self, results: Dict[str, Any]) -> str:
+        """Generate plain text report for optimization results"""
+        self._log('debug', "Generating plain text optimization report")
         
+        # Extract metadata
+        metadata = results.get('_metadata', {})
+        saved_at = metadata.get('saved_at', self.current_utc)
+        saved_by = metadata.get('saved_by', self.current_user)
+        
+        # Extract optimization settings
+        opt_settings = results.get('optimization_settings', {})
+        optimizer_type = opt_settings.get('optimizer_type', 'Unknown')
+        iterations = opt_settings.get('iterations', 0)
+        fitness_function = opt_settings.get('fitness_function', 'Unknown')
+        parameter_space = opt_settings.get('parameter_space', {})
+        
+        # Extract best results
+        best_parameters = results.get('best_parameters', {})
+        best_metrics = results.get('best_metrics', {})
+        
+        # Extract top results
+        top_results = results.get('top_results', [])
+        
+        # Build text report - header
+        text = f"""
+=============================================================
+              SUPERTREND OPTIMIZATION REPORT
+=============================================================
+Report generated on {self.current_utc} by {self.current_user}
+Optimization saved on {saved_at} by {saved_by}
+=============================================================
+
+OPTIMIZATION CONFIGURATION
+-------------------------------------------------------------
+Optimizer: {optimizer_type}
+Iterations: {iterations}
+Fitness Function: {fitness_function}
+
+PARAMETER SPACE
+-------------------------------------------------------------
+"""
+        
+        # Add parameter space
+        for param_name, param_range in parameter_space.items():
+            if isinstance(param_range, list):
+                if len(param_range) == 3 and param_range[2] != 1:  # min, max, step
+                    text += f"{param_name}: Range [{param_range[0]} to {param_range[1]}] with step {param_range[2]}\n"
+                else:
+                    text += f"{param_name}: {param_range}\n"
+            else:
+                text += f"{param_name}: {param_range}\n"
+        
+        # Best results
+        text += f"""
+OPTIMIZATION RESULTS
+-------------------------------------------------------------
+Best Parameters:
+"""
+        
+        # Add best parameters
+        for param_name, param_value in best_parameters.items():
+            text += f"{param_name}: {param_value}\n"
+        
+        # Best metrics
+        text += f"\nPerformance Metrics:\n"
+        
+        # Add best metrics
+        for metric_name, metric_value in best_metrics.items():
+            text += f"{metric_name}: {metric_value:.4f}\n"
+        
+        # Parameter analysis
+        param_analysis = results.get('parameter_analysis', {})
+        if param_analysis:
+            text += f"""
+PARAMETER ANALYSIS
+-------------------------------------------------------------
+"""
+            
+            # Add parameter importance if available
+            if 'parameter_importance' in param_analysis:
+                text += "Parameter Importance:\n"
+                importance = param_analysis['parameter_importance']
+                for param, score in sorted(importance.items(), key=lambda x: x[1], reverse=True):
+                    text += f"{param}: {score:.4f}\n"
+            
+            # Add correlations if available
+            if 'correlations' in param_analysis:
+                text += "\nParameter Correlations with Performance:\n"
+                correlations = param_analysis['correlations']
+                for param, score in sorted(correlations.items(), key=lambda x: abs(x[1]), reverse=True):
+                    direction = "positive" if score > 0 else "negative"
+                    text += f"{param}: {score:.4f} ({direction} correlation)\n"
+            
+            # Add insights
+            text += "\nParameter Insights:\n"
+            
+            if 'parameter_importance' in param_analysis:
+                importance = param_analysis['parameter_importance']
+                most_important = max(importance.items(), key=lambda x: x[1])
+                text += f"- Parameter {most_important[0]} has the highest impact on performance.\n"
+            
+            if 'correlations' in param_analysis:
+                correlations = param_analysis['correlations']
+                # Find highest positive correlation
+                pos_corr = [(k, v) for k, v in correlations.items() if v > 0]
+                if pos_corr:
+                    highest_pos = max(pos_corr, key=lambda x: x[1])
+                    text += f"- Increasing {highest_pos[0]} generally leads to better performance (correlation: {highest_pos[1]:.2f}).\n"
+                
+                # Find highest negative correlation
+                neg_corr = [(k, v) for k, v in correlations.items() if v < 0]
+                if neg_corr:
+                    highest_neg = min(neg_corr, key=lambda x: x[1])
+                    text += f"- Increasing {highest_neg[0]} generally leads to worse performance (correlation: {highest_neg[1]:.2f}).\n"
+        
+        # Top results
+        text += f"""
+TOP PARAMETER COMBINATIONS
+-------------------------------------------------------------
+"""
+        
+        if top_results and len(top_results) > 0:
+            # Get parameter names from the first result
+            param_names = list(top_results[0].get('parameters', {}).keys())
+            metric_names = list(top_results[0].get('metrics', {}).keys())
+            
+            # Create format string for header and rows
+            col_width = 10
+            header_format = "{:<5s}" + "".join([f"{{:<{col_width}s}}" for _ in range(len(param_names) + len(metric_names))])
+            row_format = "{:<5d}" + "".join([f"{{:<{col_width}}}" for _ in range(len(param_names))]) + "".join([f"{{:<{col_width}.4f}}" for _ in range(len(metric_names))])
+            
+            # Create header
+            header = header_format.format("Rank", *param_names, *metric_names)
+            text += header + "\n"
+            text += "-" * len(header) + "\n"
+            
+            # Add rows for top results
+            for i, result in enumerate(top_results[:10]):  # Top 10 results
+                params = result.get('parameters', {})
+                metrics = result.get('metrics', {})
+                
+                param_values = [params.get(param, '') for param in param_names]
+                metric_values = [metrics.get(metric, 0) for metric in metric_names]
+                
+                try:
+                    text += row_format.format(i+1, *param_values, *metric_values) + "\n"
+                except Exception as e:
+                    # Fallback if formatting fails
+                    text += f"Rank {i+1}: {params} -> {metrics}\n"
+        else:
+            text += "No top results available\n"
+        
+        # Add footer
+        text += f"""
+=============================================================
+Generated by SuperTrendAnalyzer v1.0 | {self.current_utc}
+=============================================================
+"""
+        
+        return text
+
+    def set_plot_style():
+        """Set consistent style for all plots"""
+        plt.style.use('seaborn-v0_8-whitegrid')
+        plt.rcParams['figure.figsize'] = [12, 8]
+        plt.rcParams['font.size'] = 12
+        plt.rcParams['axes.labelsize'] = 12
+        plt.rcParams['axes.titlesize'] = 14
+        plt.rcParams['xtick.labelsize'] = 10
+        plt.rcParams['ytick.labelsize'] = 10
+        plt.rcParams['legend.fontsize'] = 10
+        plt.rcParams['lines.linewidth'] = 2
+        plt.rcParams['grid.alpha'] = 0.3
+        plt.rcParams['axes.grid'] = True
+    
+    
 # ==============================================================================
 # GUI FRAMEWORK
 # ==============================================================================
