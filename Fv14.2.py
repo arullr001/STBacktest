@@ -25,6 +25,7 @@ from PyQt5.QtWidgets import QStyleFactory
 import threading
 import queue
 import uuid
+import multiprocessing
 import concurrent.futures
 import matplotlib.dates as mdates
 import matplotlib.ticker as mticker
@@ -89,7 +90,7 @@ from PyQt5.QtWidgets import (
     QFileDialog, QMessageBox, QProgressBar, QTableWidget, QTableWidgetItem,
     QSplitter, QFrame, QGroupBox, QFormLayout, QSizePolicy, QTextEdit, QMenu,
     QAction, QToolBar, QStatusBar, QDockWidget, QListWidget, QScrollArea,
-    QStyleFactory, QGridLayout, QInputDialog, QProgressDialog
+    QStyleFactory, QGridLayout, QInputDialog, QProgressDialog, QHeaderView
 )
 from PyQt5.QtCore import (
     Qt, QThread, pyqtSignal, pyqtSlot, QTimer, QSettings, QSize, QRect, QPoint, QUrl
@@ -6862,6 +6863,10 @@ class OptimizationWorker(QThread):
     def update_progress(self, progress_info):
         """Callback function for optimizer to report progress"""
         if not self.stop_requested:
+            # Print to console to confirm progress is being generated
+            print(f"Progress update: {progress_info.get('completed', 0)}/{progress_info.get('total', 0)}")
+        
+            # Make sure we emit the signal
             self.progress_signal.emit(progress_info)
     
     def stop(self):
@@ -6916,7 +6921,7 @@ class SuperTrendGUI(QMainWindow):
     def setup_ui(self):
         """Set up the main user interface"""
         # Set window properties
-        self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}"))
+        self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
         self.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
         
         # Create central widget and main layout
@@ -7263,21 +7268,21 @@ class SuperTrendGUI(QMainWindow):
         ranges_layout.addWidget(QLabel("Factor:"), 1, 0)
         ranges_layout.addWidget(QLabel("Min:"), 1, 1)
         self.factor_min_input = QDoubleSpinBox()
-        self.factor_min_input.setRange(0.1, 10.0)
+        self.factor_min_input.setRange(0.1, 50.0)
         self.factor_min_input.setSingleStep(0.1)
         self.factor_min_input.setValue(DEFAULT_FACTOR_RANGE[0])
         ranges_layout.addWidget(self.factor_min_input, 1, 2)
         
         ranges_layout.addWidget(QLabel("Max:"), 1, 3)
         self.factor_max_input = QDoubleSpinBox()
-        self.factor_max_input.setRange(0.1, 10.0)
+        self.factor_max_input.setRange(0.1, 50.0)
         self.factor_max_input.setSingleStep(0.1)
         self.factor_max_input.setValue(DEFAULT_FACTOR_RANGE[1])
         ranges_layout.addWidget(self.factor_max_input, 1, 4)
         
         ranges_layout.addWidget(QLabel("Step:"), 1, 5)
         self.factor_step_input = QDoubleSpinBox()
-        self.factor_step_input.setRange(0.01, 1.0)
+        self.factor_step_input.setRange(0.01, 10.0)
         self.factor_step_input.setSingleStep(0.01)
         self.factor_step_input.setValue(DEFAULT_FACTOR_RANGE[2])
         ranges_layout.addWidget(self.factor_step_input, 1, 6)
@@ -7286,21 +7291,21 @@ class SuperTrendGUI(QMainWindow):
         ranges_layout.addWidget(QLabel("Buffer:"), 2, 0)
         ranges_layout.addWidget(QLabel("Min:"), 2, 1)
         self.buffer_min_input = QDoubleSpinBox()
-        self.buffer_min_input.setRange(0.0, 5.0)
+        self.buffer_min_input.setRange(0.01, 10.0)
         self.buffer_min_input.setSingleStep(0.05)
         self.buffer_min_input.setValue(DEFAULT_BUFFER_RANGE[0])
         ranges_layout.addWidget(self.buffer_min_input, 2, 2)
         
         ranges_layout.addWidget(QLabel("Max:"), 2, 3)
         self.buffer_max_input = QDoubleSpinBox()
-        self.buffer_max_input.setRange(0.0, 5.0)
+        self.buffer_max_input.setRange(0.01, 10.0)
         self.buffer_max_input.setSingleStep(0.05)
         self.buffer_max_input.setValue(DEFAULT_BUFFER_RANGE[1])
         ranges_layout.addWidget(self.buffer_max_input, 2, 4)
         
         ranges_layout.addWidget(QLabel("Step:"), 2, 5)
         self.buffer_step_input = QDoubleSpinBox()
-        self.buffer_step_input.setRange(0.01, 1.0)
+        self.buffer_step_input.setRange(0.01, 10.0)
         self.buffer_step_input.setSingleStep(0.01)
         self.buffer_step_input.setValue(DEFAULT_BUFFER_RANGE[2])
         ranges_layout.addWidget(self.buffer_step_input, 2, 6)
@@ -7309,19 +7314,19 @@ class SuperTrendGUI(QMainWindow):
         ranges_layout.addWidget(QLabel("Stop Distance:"), 3, 0)
         ranges_layout.addWidget(QLabel("Min:"), 3, 1)
         self.stop_min_input = QSpinBox()
-        self.stop_min_input.setRange(0, 200)
+        self.stop_min_input.setRange(0, 500)
         self.stop_min_input.setValue(DEFAULT_STOP_RANGE[0])
         ranges_layout.addWidget(self.stop_min_input, 3, 2)
         
         ranges_layout.addWidget(QLabel("Max:"), 3, 3)
         self.stop_max_input = QSpinBox()
-        self.stop_max_input.setRange(0, 200)
+        self.stop_max_input.setRange(0, 500)
         self.stop_max_input.setValue(DEFAULT_STOP_RANGE[1])
         ranges_layout.addWidget(self.stop_max_input, 3, 4)
         
         ranges_layout.addWidget(QLabel("Step:"), 3, 5)
         self.stop_step_input = QSpinBox()
-        self.stop_step_input.setRange(1, 20)
+        self.stop_step_input.setRange(1, 500)
         self.stop_step_input.setValue(DEFAULT_STOP_RANGE[2])
         ranges_layout.addWidget(self.stop_step_input, 3, 6)
         
@@ -7708,7 +7713,7 @@ class SuperTrendGUI(QMainWindow):
             QApplication.processEvents()
             
             # Load data
-            self.df = self.data_processor.load_file(file_path)
+            self.df = self.data_loader.load_file(file_path)
             
             progress.setValue(50)
             QApplication.processEvents()
@@ -8230,6 +8235,11 @@ Probability of Profit: {monte_carlo.get('probability', {}).get('profit', 0)*100:
                 min_trades, self.time_exit_input.value(), parallelism
             )
             
+            # VERIFY SIGNAL CONNECTIONS
+            print("Connecting optimization worker signals")
+            self.optimization_worker.progress_signal.connect(self.update_optimization_progress)
+            self.optimization_worker.result_signal.connect(self.optimization_completed)
+            
             # Connect signals
             self.optimization_worker.progress_signal.connect(self.update_optimization_progress)
             self.optimization_worker.result_signal.connect(self.optimization_completed)
@@ -8282,6 +8292,9 @@ Probability of Profit: {monte_carlo.get('probability', {}).get('profit', 0)*100:
         self.remaining_combinations_label.setText(str(total - completed))
         self.valid_results_label.setText(str(data.get('valid_results', 0)))
         
+        # Force UI update - CRITICAL ADDITION
+        QApplication.processEvents()
+                
         # Update top combinations table
         top_combinations = data.get('top_combinations', [])
         for row, combo in enumerate(top_combinations[:5]):
