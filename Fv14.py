@@ -15,6 +15,7 @@ import time
 import logging
 import traceback
 import warnings
+import tempfile
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Tuple, Union, Any, Optional
@@ -27,6 +28,7 @@ import uuid
 import concurrent.futures
 import matplotlib.dates as mdates
 import matplotlib.ticker as mticker
+import random
 
 # Add to the existing imports section:
 from collections import Counter
@@ -63,6 +65,7 @@ except ImportError:
 try:
     import dask
     import dask.dataframe as dd
+    import dask.bag as db
     from dask.diagnostics import ProgressBar
     HAS_DASK = True
 except ImportError:
@@ -4597,28 +4600,39 @@ class ResultsStorage:
     
     def __init__(self, base_dir: str = None, log_manager: LogManager = None):
         self.log = log_manager
-        self.current_utc = "2025-06-24 14:58:52"  # Updated timestamp
-        self.current_user = "arullr001"           # Updated username
-        
+        self.current_utc = "2025-06-24 17:20:39"  # Updated with current UTC time
+        self.current_user = "arullr001"           # Updated with current username
+    
         # Set base directory for results storage
         if base_dir is None:
-            self.base_dir = os.path.join(os.path.expanduser("~"), "SuperTrend_Results")
+            # Get script directory instead of home directory
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            # Use the same run directory as logs if available
+            if hasattr(log_manager, 'base_dir') and log_manager.base_dir:
+                self.base_dir = log_manager.base_dir
+            else:
+                # Create a new results directory at script location
+                timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+                run_id = generate_unique_id()
+                run_dir = f"SuperTrend_Run_{timestamp}_{run_id}"
+                self.base_dir = os.path.join(script_dir, run_dir)
         else:
             self.base_dir = base_dir
-        
+    
         # Create directory structure if it doesn't exist
         self.backtest_dir = os.path.join(self.base_dir, "backtests")
         self.optimization_dir = os.path.join(self.base_dir, "optimizations")
         self.reports_dir = os.path.join(self.base_dir, "reports")
         self.charts_dir = os.path.join(self.base_dir, "charts")
-        
+    
         os.makedirs(self.backtest_dir, exist_ok=True)
         os.makedirs(self.optimization_dir, exist_ok=True)
         os.makedirs(self.reports_dir, exist_ok=True)
         os.makedirs(self.charts_dir, exist_ok=True)
-        
-        self._log('debug', f"ResultsStorage initialized with base directory: {self.base_dir}")
     
+        self._log('debug', f"ResultsStorage initialized with base directory: {self.base_dir}")    
+        
+        
     def _log(self, level: str, message: str):
         """Log message if log_manager is available"""
         if self.log:
@@ -6355,6 +6369,14 @@ class SuperTrendGUI(QMainWindow):
         self.results_storage = ResultsStorage(log_manager=log_manager)
         self.report_generator = ReportGenerator(log_manager)
         
+        
+        # Pass the same base_dir to ResultsStorage
+        if log_manager and hasattr(log_manager, 'base_dir'):
+            self.results_storage = ResultsStorage(base_dir=log_manager.base_dir, log_manager=log_manager)
+        else:
+            self.results_storage = ResultsStorage(log_manager=log_manager)
+        
+        
         # Data containers
         self.df = None  # Original data
         self.df_st = None  # Data with SuperTrend
@@ -6555,7 +6577,7 @@ class SuperTrendGUI(QMainWindow):
         # Buffer Multiplier
         params_layout.addWidget(QLabel("Buffer Multiplier:"), 2, 0)
         self.buffer_input = QDoubleSpinBox()
-        self.buffer_input.setRange(0.1, 3.0)
+        self.buffer_input.setRange(0.1, 10.0)
         self.buffer_input.setSingleStep(0.1)
         self.buffer_input.setValue(0.3)
         params_layout.addWidget(self.buffer_input, 2, 1)
@@ -6758,7 +6780,7 @@ class SuperTrendGUI(QMainWindow):
         
         ranges_layout.addWidget(QLabel("to"), 2, 2)
         self.buffer_max_input = QDoubleSpinBox()
-        self.buffer_max_input.setRange(0.1, 3.0)
+        self.buffer_max_input.setRange(0.1, 10.0)
         self.buffer_max_input.setSingleStep(0.1)
         self.buffer_max_input.setValue(0.5)
         ranges_layout.addWidget(self.buffer_max_input, 2, 3)
@@ -6807,7 +6829,7 @@ class SuperTrendGUI(QMainWindow):
         # Minimum trades
         settings_layout.addWidget(QLabel("Minimum Trades:"), 1, 0)
         self.min_trades_input = QSpinBox()
-        self.min_trades_input.setRange(5, 100)
+        self.min_trades_input.setRange(5, 1000)
         self.min_trades_input.setValue(10)
         settings_layout.addWidget(self.min_trades_input, 1, 1)
         
@@ -8427,11 +8449,19 @@ along with comprehensive backtesting and parameter optimization tools.</p>
 
 def main():
     """Main entry point for the application"""
-    # Create a base directory for logs
-    base_dir = os.path.join(os.path.expanduser("~"), "SuperTrend_Logs")
+    # Get the directory where the script is located
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Create a unique run directory with timestamp and ID
+    timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+    run_id = generate_unique_id()  # This function already exists in the code
+    run_dir = f"SuperTrend_Run_{timestamp}_{run_id}"
+    
+    # Create the full path for this run
+    base_dir = os.path.join(script_dir, run_dir)
     os.makedirs(base_dir, exist_ok=True)
     
-    # Set up logging with base directory
+    # Set up logging with this new base directory
     log_manager = LogManager(base_dir)
     log_manager.setup_logging()
     log_manager.info(f"Starting SuperTrend Backtester v{APP_VERSION}")
