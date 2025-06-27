@@ -3654,6 +3654,10 @@ class GridSearchOptimizer:
         """Run optimization using process parallelism"""
         self._log('info', f"Running optimization with ProcessPoolExecutor using {CPU_THREADS} workers")
         
+        # Change to use thread parallelism instead if having issues with process parallelism
+        self._log('info', "Falling back to thread parallelism due to potential multiprocessing issues")
+        return self._run_threaded(df, param_combinations, optimization_metric, min_trades, time_exit_hours)
+        
         # Calculate memory usage
         df_size = sys.getsizeof(df) / (1024 * 1024)  # Size in MB
         available_ram = psutil.virtual_memory().available / (1024 * 1024)  # Available RAM in MB
@@ -6833,6 +6837,18 @@ class OptimizationWorker(QThread):
         
     def run(self):
         try:
+            # Get the current process name for debugging
+            process_name = multiprocessing.current_process().name
+            print(f"Starting optimization in process: {process_name}")
+        
+            # Select optimizer based on method
+            if self.method == "Grid Search":
+                optimizer = GridSearchOptimizer(progress_callback=self.update_progress)
+                results = optimizer.optimize(
+                    self.df, self.param_ranges, self.optimization_metric,
+                    self.min_trades, self.time_exit_hours, self.parallelism
+                )
+
             # Select optimizer based on method
             if self.method == "Grid Search":
                 optimizer = GridSearchOptimizer(progress_callback=self.update_progress)
@@ -8259,6 +8275,10 @@ Probability of Profit: {monte_carlo.get('probability', {}).get('profit', 0)*100:
 
     def update_optimization_progress(self, data):
         """Update UI with optimization progress"""
+        # Print to console to confirm callback is being called
+        print(f"UI received progress update: {data.get('completed', 0)}/{data.get('total', 0)}")
+    
+        
         # Check for error
         if 'error' in data:
             self.status_bar.showMessage(f"Error in optimization: {data['error']}")
@@ -8374,6 +8394,9 @@ Probability of Profit: {monte_carlo.get('probability', {}).get('profit', 0)*100:
         
         # Update chart tab if needed
         self.update_chart()
+        
+        # Force UI update explicitly
+        QApplication.processEvents()
 
     def on_apply_best_parameters(self):
         """Apply the best parameters from optimization to the parameters tab"""
