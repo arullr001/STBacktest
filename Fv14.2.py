@@ -2550,7 +2550,7 @@ class MonteCarloSimulation:
             random.shuffle(trade_list)
         
         # Run simulations in parallel
-        with concurrent.futures.ThreadPoolExecutor(max_workers=CPU_THREADS) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             futures = [
                 executor.submit(self._run_single_simulation, trade_list, i, initial_capital)
                 for i, trade_list in enumerate(trade_copies)
@@ -3593,6 +3593,9 @@ class GridSearchOptimizer:
         counter_lock = threading.Lock()
         
         def process_combination(idx, params):
+            print(f"Thread {threading.current_thread().name}: Processing combination {idx}: {params}")
+            ...
+            
             nonlocal completed, valid_count
             atr_length, factor, buffer, stop = params
             
@@ -3638,7 +3641,7 @@ class GridSearchOptimizer:
             })
         
         # Create a thread pool and submit all tasks
-        with concurrent.futures.ThreadPoolExecutor(max_workers=CPU_THREADS) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             # Submit all combinations to the executor
             futures = [executor.submit(process_combination, idx, params) 
                      for idx, params in enumerate(param_combinations)]
@@ -4881,7 +4884,7 @@ class GeneticOptimizer:
         evaluated_population = []
         
         # Process individuals in parallel
-        with concurrent.futures.ThreadPoolExecutor(max_workers=CPU_THREADS) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
             futures = {}
             
             for individual in population:
