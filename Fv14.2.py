@@ -31,11 +31,44 @@ import matplotlib.dates as mdates
 import matplotlib.ticker as mticker
 import random
 
-# Add to the existing imports section:
 from collections import Counter
 from copy import deepcopy
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
 import itertools  # For parameter combinations in optimization
+
+# Modern data processing libraries
+# Polars - Fast DataFrame library (replacement for pandas)
+HAS_POLARS = False
+try:
+    import polars as pl
+    HAS_POLARS = True
+except ImportError:
+    pass  # Polars not available
+
+# Vaex - Out-of-core DataFrames for large datasets
+HAS_VAEX = False
+try:
+    import vaex
+    HAS_VAEX = True
+except ImportError:
+    pass  # Vaex not available
+
+# PyTorch - For GPU-accelerated tensor operations
+HAS_TORCH = False
+try:
+    import torch
+    HAS_TORCH = cuda_available = torch.cuda.is_available()
+    HAS_TORCH = True
+except ImportError:
+    pass  # PyTorch not available
+
+# Datatable - Fast data manipulation library
+HAS_DATATABLE = False
+try:
+    import datatable as dt
+    HAS_DATATABLE = True
+except ImportError:
+    pass  # datatable not available
 
 # Data processing
 import numpy as np
@@ -72,6 +105,61 @@ try:
 except ImportError:
     HAS_DASK = False
 
+
+# New GPU Implementation
+HAS_CUDF = False
+try:
+    import cudf
+    HAS_CUDF = True
+except ImportError:
+    pass  # cuDF not available
+
+HAS_NUMBA = False
+try:
+    import numba
+    HAS_NUMBA = True
+except ImportError:
+    pass  # Numba not available
+
+HAS_CUDA = False
+try:
+    from numba import cuda
+    test_device = cuda.get_current_device()
+    HAS_CUDA = True
+    del test_device  # Clean up the variable
+except (ImportError, cuda.CudaSupportError):
+    pass  # CUDA not available or not working
+
+# Optional visualization/analysis libraries
+HAS_PLOTLY = False
+try:
+    import plotly
+    import plotly.graph_objects
+    HAS_PLOTLY = True
+except ImportError:
+    pass  # Plotly not available
+
+HAS_SKLEARN = False
+try:
+    import sklearn
+    HAS_SKLEARN = True
+except ImportError:
+    pass  # scikit-learn not available
+
+HAS_SKOPT = False
+try:
+    import skopt
+    HAS_SKOPT = True
+except ImportError:
+    pass  # scikit-optimize not available
+
+HAS_DEAP = False
+try:
+    import deap
+    HAS_DEAP = True
+except ImportError:
+    pass  # DEAP genetic algorithm library not available    
+
 # Memory monitoring
 import psutil
 
@@ -81,7 +169,6 @@ import matplotlib.pyplot as plt
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 import seaborn as sns
-
 
 # GUI Framework - PyQt5
 from PyQt5.QtWidgets import (
@@ -99,6 +186,8 @@ from PyQt5.QtGui import (
     QIcon, QPixmap, QColor, QFont, QPalette, QDesktopServices, QTextCursor
 )
 
+# Suppress warnings
+warnings.filterwarnings('ignore')
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
@@ -1862,26 +1951,28 @@ class SuperTrendCuPy(SuperTrendCalculator):
 
 class SuperTrend:
     """
-    SuperTrend indicator calculator with automatic selection of best implementation.
-    This is the main class to be used for SuperTrend calculations.
+    SuperTrend indicator calculator with GPU-optimized implementation
     """
     
     def __init__(self, log_manager: LogManager = None):
         self.log = log_manager
-        self.current_utc = "2025-06-24 12:54:35"  # Updated timestamp
-        self.current_user = "arullr001"  # Updated username
+        self.current_utc = "2025-06-27 19:36:52"  # Updated timestamp
+        self.current_user = "arullr001"           # Updated username
         
-        # Initialize all implementations
-        self.cpu_implementation = SuperTrendCPU(log_manager)
-        self.gpu_implementation = SuperTrendGPU(log_manager)
-        self.cupy_implementation = SuperTrendCuPy(log_manager) if HAS_CUPY else None
+        # Track GPU context
+        self._gpu_context = None
+        self._has_cudf = HAS_CUDF
+        self._has_numba = HAS_NUMBA
         
-        # Detect available hardware
-        self.has_gpu = check_gpu_availability()
-        self.has_cupy = HAS_CUPY
-        self.is_windows = sys.platform.startswith('win')
-        
-        self._log('debug', f"SuperTrend initialized with GPU={self.has_gpu}, CuPy={self.has_cupy}, Windows={self.is_windows}")
+        if self._has_cudf:
+            self._log('info', "CUDF is available for GPU acceleration")
+        else:
+            self._log('debug', "CUDF not available, using fallback implementations")
+            
+        if self._has_numba:
+            self._log('info', "Numba is available for JIT compilation")
+        else:
+            self._log('debug', "Numba not available, using fallback implementations")
     
     def _log(self, level: str, message: str):
         """Log message if log_manager is available"""
@@ -1895,80 +1986,668 @@ class SuperTrend:
             elif level == 'error':
                 self.log.error(message)
     
-    def calculate(self, df: pd.DataFrame, atr_length: int, factor: float, 
-                 buffer_multiplier: float, force_implementation: str = None) -> pd.DataFrame:
+    def calculate(self, df: pd.DataFrame, 
+                atr_length: int = 14,
+                factor: float = 3.0,
+                buffer_multiplier: float = 0.3,
+                force_implementation: str = None,
+                precomputed_patterns: Dict = None) -> pd.DataFrame:
         """
-        Calculate SuperTrend indicator using the best available implementation
+        Calculate SuperTrend and return dataframe with added columns
         
         Args:
             df: DataFrame with OHLC data
             atr_length: Period for ATR calculation
-            factor: Multiplier for ATR to set band distance
-            buffer_multiplier: Multiplier for setting buffer zones
-            force_implementation: Force specific implementation ('cpu', 'gpu', 'cupy')
+            factor: Multiplier for ATR
+            buffer_multiplier: Additional buffer for trend changes
+            force_implementation: Force specific implementation ('cpu', 'cudf', 'numba', 'gpu')
+            precomputed_patterns: Dictionary with precomputed elements for optimization
             
         Returns:
-            DataFrame with SuperTrend calculations and signals
+            DataFrame with SuperTrend columns:
+                - supertrend: SuperTrend value
+                - trend: 1 for uptrend, -1 for downtrend
+                - trend_changed: True on trend change candle
+                - supertrend_signal: Signal (1=buy, -1=sell, 0=no signal)
+                - supertrend_upper: Upper band
+                - supertrend_lower: Lower band
         """
-        self._log('info', f"Calculating SuperTrend with ATR={atr_length}, Factor={factor}, Buffer={buffer_multiplier}")
+        # If we have precomputed patterns and they match the current parameters, use them
+        if precomputed_patterns and self._can_use_precomputed(precomputed_patterns, atr_length):
+            self._log('debug', "Using precomputed patterns for SuperTrend calculation")
+            return self._calculate_with_precomputed(df, atr_length, factor, buffer_multiplier, precomputed_patterns)
         
-        start_time = time.time()
+        # Choose implementation
+        implementation = self._choose_implementation(force_implementation)
         
-        # Select implementation
-        if force_implementation:
-            if force_implementation == 'cpu':
-                self._log('info', "Using CPU implementation (forced)")
-                result = self.cpu_implementation.calculate(df, atr_length, factor, buffer_multiplier)
-            elif force_implementation == 'gpu' and self.has_gpu:
-                self._log('info', "Using GPU implementation (forced)")
-                result = self.gpu_implementation.calculate(df, atr_length, factor, buffer_multiplier)
-            elif force_implementation == 'cupy' and self.has_cupy:
-                self._log('info', "Using CuPy implementation (forced)")
-                result = self.cupy_implementation.calculate(df, atr_length, factor, buffer_multiplier)
-            else:
-                self._log('warning', f"Forced implementation '{force_implementation}' not available, using best available")
-                # Fall through to automatic selection
-                result = self._select_best_implementation(df, atr_length, factor, buffer_multiplier)
+        # Log the implementation choice
+        self._log('debug', f"Using {implementation} implementation for SuperTrend calculation")
+        
+        # Create a copy of input dataframe to avoid modifying the original
+        result_df = df.copy()
+        
+        # Calculate based on chosen implementation
+        if implementation == 'cudf':
+            result_df = self._calculate_cudf(result_df, atr_length, factor, buffer_multiplier)
+        elif implementation == 'numba':
+            result_df = self._calculate_numba(result_df, atr_length, factor, buffer_multiplier)
         else:
-            # Automatic selection based on data size and hardware
-            result = self._select_best_implementation(df, atr_length, factor, buffer_multiplier)
+            # Fallback to CPU implementation
+            result_df = self._calculate_cpu(result_df, atr_length, factor, buffer_multiplier)
         
-        elapsed = time.time() - start_time
-        self._log('info', f"SuperTrend calculation completed in {elapsed:.2f} seconds")
+        return result_df
+
+    def precompute_patterns(self, df: pd.DataFrame) -> Dict:
+        """
+        Precompute common elements for multiple SuperTrend calculations to optimize GPU usage
         
-        # Verify results
-        if not self.cpu_implementation.verify_result(result):
-            self._log('warning', "SuperTrend calculation produced suspect results")
-        
-        return result
+        Args:
+            df: DataFrame with OHLC data
+            
+        Returns:
+            Dictionary with precomputed elements
+        """
+        try:
+            if not HAS_CUDF:
+                self._log('warning', "CUDF not available, skipping precomputation")
+                return None
+                
+            # Import as needed
+            import cudf
+            import numpy as np
+            
+            # Create or reuse GPU context
+            self._ensure_gpu_context()
+            
+            # Start by moving data to GPU
+            self._log('debug', "Moving data to GPU for precomputation")
+            gdf = cudf.DataFrame.from_pandas(df)
+            
+            # Precompute high-low difference and ATR components (these are independent of atr_length)
+            gdf['hl_diff'] = gdf['high'] - gdf['low']
+            gdf['hc_diff'] = (gdf['high'] - gdf['close'].shift(1)).abs()
+            gdf['lc_diff'] = (gdf['low'] - gdf['close'].shift(1)).abs()
+            
+            # Precompute common ATR lengths
+            atr_patterns = {}
+            common_lengths = [7, 10, 14, 20, 30]
+            
+            for length in common_lengths:
+                # Calculate true range
+                gdf['tr'] = gdf[['hl_diff', 'hc_diff', 'lc_diff']].max(axis=1)
+                
+                # Calculate ATR
+                gdf[f'atr_{length}'] = gdf['tr'].rolling(window=length).mean()
+                
+                # Store the ATR column in our patterns dictionary
+                atr_patterns[length] = gdf[f'atr_{length}'].to_pandas()
+            
+            # Calculate median price
+            gdf['median_price'] = (gdf['high'] + gdf['low']) / 2
+            
+            # Store the required columns in our patterns dictionary
+            patterns = {
+                'high': gdf['high'].to_array(),
+                'low': gdf['low'].to_array(),
+                'close': gdf['close'].to_array(),
+                'median_price': gdf['median_price'].to_pandas(),
+                'atr_patterns': atr_patterns,
+                'data_fingerprint': self._get_data_fingerprint(df)
+            }
+            
+            self._log('info', f"Successfully precomputed patterns for SuperTrend with {len(common_lengths)} ATR lengths")
+            
+            return patterns
+            
+        except Exception as e:
+            self._log('error', f"Error in precomputing patterns: {str(e)}")
+            # Don't raise exception, just return None to allow fallback to regular calculation
+            return None
     
-    def _select_best_implementation(self, df: pd.DataFrame, atr_length: int, factor: float, 
-                                  buffer_multiplier: float) -> pd.DataFrame:
-        """Select best implementation based on data size and available hardware"""
-        data_size = len(df)
+    def _get_data_fingerprint(self, df: pd.DataFrame) -> str:
+        """Get a fingerprint of the data to verify compatibility with precomputed patterns"""
+        return f"{len(df)}_{df.index[0]}_{df.index[-1]}"
+    
+    def _can_use_precomputed(self, precomputed_patterns: Dict, atr_length: int) -> bool:
+        """Check if precomputed patterns can be used for the requested parameters"""
+        if not precomputed_patterns:
+            return False
+            
+        # Check if we have the requested ATR length
+        if 'atr_patterns' not in precomputed_patterns:
+            return False
+            
+        if atr_length not in precomputed_patterns['atr_patterns']:
+            return False
+            
+        return True
+    
+    def _calculate_with_precomputed(self, df: pd.DataFrame, 
+                                  atr_length: int,
+                                  factor: float,
+                                  buffer_multiplier: float,
+                                  precomputed_patterns: Dict) -> pd.DataFrame:
+        """Calculate SuperTrend using precomputed patterns"""
+        try:
+            # Create a copy of input dataframe
+            result_df = df.copy()
+            
+            # Get precomputed ATR
+            atr = precomputed_patterns['atr_patterns'][atr_length]
+            
+            # Get median price
+            median_price = precomputed_patterns['median_price']
+            
+            # Calculate basic and final bands
+            result_df['basic_upper_band'] = median_price + factor * atr
+            result_df['basic_lower_band'] = median_price - factor * atr
+            
+            # Calculate with buffers
+            result_df['final_upper_band'] = self._calculate_final_bands(
+                result_df['basic_upper_band'], 
+                result_df['close'], 
+                'upper',
+                buffer_multiplier
+            )
+            
+            result_df['final_lower_band'] = self._calculate_final_bands(
+                result_df['basic_lower_band'], 
+                result_df['close'], 
+                'lower',
+                buffer_multiplier
+            )
+            
+            # Calculate trend and supertrend
+            result_df['trend'] = self._calculate_trend(
+                result_df['close'], 
+                result_df['final_upper_band'], 
+                result_df['final_lower_band']
+            )
+            
+            # Calculate supertrend values and signals
+            self._calculate_supertrend_signals(result_df)
+            
+            # Drop intermediate columns
+            result_df.drop(['basic_upper_band', 'basic_lower_band'], axis=1, inplace=True)
+            
+            return result_df
+            
+        except Exception as e:
+            self._log('error', f"Error in precomputed calculation: {str(e)}")
+            # Fallback to CPU implementation
+            self._log('info', "Falling back to CPU implementation")
+            return self._calculate_cpu(df, atr_length, factor, buffer_multiplier)
+    
+    def _choose_implementation(self, force_implementation: str = None) -> str:
+        """Choose the appropriate implementation based on availability and preferences"""
+        # If implementation is forced, try to use it
+        if force_implementation:
+            if force_implementation.lower() == 'cudf' and not HAS_CUDF:
+                self._log('warning', "CUDF implementation requested but not available, falling back")
+            elif force_implementation.lower() == 'numba' and not HAS_NUMBA:
+                self._log('warning', "Numba implementation requested but not available, falling back")
+            elif force_implementation.lower() == 'gpu' and not (HAS_CUDF or HAS_NUMBA):
+                self._log('warning', "GPU implementation requested but neither CUDF nor Numba available, falling back")
+            elif force_implementation.lower() in ['cudf', 'numba', 'gpu', 'cpu']:
+                if force_implementation.lower() == 'gpu':
+                    # For 'gpu', prioritize CUDF over Numba
+                    return 'cudf' if HAS_CUDF else ('numba' if HAS_NUMBA else 'cpu')
+                return force_implementation.lower()
         
-        # For large data and available GPU, use optimized GPU implementations
-        if data_size > 10000:
-            if self.has_gpu:
-                # On Windows, prioritize CUDA implementation for better compatibility
-                if self.is_windows or not self.has_cupy:
-                    self._log('info', "Using optimized CUDA implementation")
-                    return self.gpu_implementation.calculate(df, atr_length, factor, buffer_multiplier)
+        # Auto-select best available implementation
+        if HAS_CUDF:
+            return 'cudf'
+        elif HAS_NUMBA:
+            return 'numba'
+        else:
+            return 'cpu'
+    
+    def _calculate_cpu(self, df: pd.DataFrame, 
+                     atr_length: int,
+                     factor: float,
+                     buffer_multiplier: float) -> pd.DataFrame:
+        """Calculate SuperTrend using CPU implementation"""
+        # Create a copy of input dataframe
+        result_df = df.copy()
+        
+        # Calculate true range
+        tr1 = result_df['high'] - result_df['low']
+        tr2 = (result_df['high'] - result_df['close'].shift(1)).abs()
+        tr3 = (result_df['low'] - result_df['close'].shift(1)).abs()
+        result_df['tr'] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        
+        # Calculate ATR
+        result_df['atr'] = result_df['tr'].rolling(window=atr_length).mean()
+        
+        # Calculate median price
+        result_df['median_price'] = (result_df['high'] + result_df['low']) / 2
+        
+        # Calculate basic bands
+        result_df['basic_upper_band'] = result_df['median_price'] + factor * result_df['atr']
+        result_df['basic_lower_band'] = result_df['median_price'] - factor * result_df['atr']
+        
+        # Calculate final bands with buffer
+        result_df['final_upper_band'] = self._calculate_final_bands(
+            result_df['basic_upper_band'], 
+            result_df['close'], 
+            'upper',
+            buffer_multiplier
+        )
+        
+        result_df['final_lower_band'] = self._calculate_final_bands(
+            result_df['basic_lower_band'], 
+            result_df['close'], 
+            'lower',
+            buffer_multiplier
+        )
+        
+        # Calculate trend
+        result_df['trend'] = self._calculate_trend(
+            result_df['close'], 
+            result_df['final_upper_band'], 
+            result_df['final_lower_band']
+        )
+        
+        # Calculate supertrend
+        self._calculate_supertrend_signals(result_df)
+        
+        # Clean up intermediate columns
+        result_df.drop(['tr', 'atr', 'median_price', 'basic_upper_band', 'basic_lower_band'], axis=1, inplace=True)
+        
+        return result_df
+    
+    def _calculate_cudf(self, df: pd.DataFrame, 
+                      atr_length: int,
+                      factor: float,
+                      buffer_multiplier: float) -> pd.DataFrame:
+        """Calculate SuperTrend using CUDF (GPU) implementation"""
+        try:
+            # Import cudf
+            import cudf
+            
+            # Create or reuse GPU context
+            self._ensure_gpu_context()
+            
+            # Convert pandas DataFrame to cuDF DataFrame
+            gdf = cudf.DataFrame.from_pandas(df)
+            
+            # Calculate true range
+            gdf['hl_diff'] = gdf['high'] - gdf['low']
+            gdf['hc_diff'] = (gdf['high'] - gdf['close'].shift(1)).abs()
+            gdf['lc_diff'] = (gdf['low'] - gdf['close'].shift(1)).abs()
+            gdf['tr'] = gdf[['hl_diff', 'hc_diff', 'lc_diff']].max(axis=1)
+            
+            # Calculate ATR
+            gdf['atr'] = gdf['tr'].rolling(window=atr_length).mean()
+            
+            # Calculate median price
+            gdf['median_price'] = (gdf['high'] + gdf['low']) / 2
+            
+            # Calculate basic bands
+            gdf['basic_upper_band'] = gdf['median_price'] + factor * gdf['atr']
+            gdf['basic_lower_band'] = gdf['median_price'] - factor * gdf['atr']
+            
+            # Cannot directly use _calculate_final_bands on GPU, do calculation inline
+            # Final upper band
+            gdf['final_upper_band'] = 0.0
+            for i in range(1, len(gdf)):
+                if (gdf['basic_upper_band'][i] < gdf['final_upper_band'][i-1] or 
+                    gdf['close'][i-1] > gdf['final_upper_band'][i-1]):
+                    gdf['final_upper_band'][i] = gdf['basic_upper_band'][i]
                 else:
-                    self._log('info', "Using CuPy implementation")
-                    return self.cupy_implementation.calculate(df, atr_length, factor, buffer_multiplier)
+                    gdf['final_upper_band'][i] = gdf['final_upper_band'][i-1]
+                    
+                # Apply buffer
+                if buffer_multiplier > 0:
+                    buffer_val = buffer_multiplier * gdf['atr'][i]
+                    if gdf['close'][i-1] > gdf['final_upper_band'][i-1]:
+                        # Allow more room when switching from below to above
+                        gdf['final_upper_band'][i] = gdf['final_upper_band'][i] + buffer_val
+            
+            # Final lower band
+            gdf['final_lower_band'] = 0.0
+            for i in range(1, len(gdf)):
+                if (gdf['basic_lower_band'][i] > gdf['final_lower_band'][i-1] or 
+                    gdf['close'][i-1] < gdf['final_lower_band'][i-1]):
+                    gdf['final_lower_band'][i] = gdf['basic_lower_band'][i]
+                else:
+                    gdf['final_lower_band'][i] = gdf['final_lower_band'][i-1]
+                    
+                # Apply buffer
+                if buffer_multiplier > 0:
+                    buffer_val = buffer_multiplier * gdf['atr'][i]
+                    if gdf['close'][i-1] < gdf['final_lower_band'][i-1]:
+                        # Allow more room when switching from above to below
+                        gdf['final_lower_band'][i] = gdf['final_lower_band'][i] - buffer_val
+            
+            # Calculate trend
+            gdf['trend'] = 0
+            for i in range(1, len(gdf)):
+                if gdf['close'][i] > gdf['final_upper_band'][i-1]:
+                    gdf['trend'][i] = 1
+                elif gdf['close'][i] < gdf['final_lower_band'][i-1]:
+                    gdf['trend'][i] = -1
+                else:
+                    gdf['trend'][i] = gdf['trend'][i-1]
+            
+            # Calculate supertrend
+            gdf['supertrend'] = 0.0
+            for i in range(1, len(gdf)):
+                if gdf['trend'][i] == 1:
+                    gdf['supertrend'][i] = gdf['final_lower_band'][i]
+                else:
+                    gdf['supertrend'][i] = gdf['final_upper_band'][i]
+            
+            # Calculate trend changed and signals
+            gdf['trend_changed'] = gdf['trend'] != gdf['trend'].shift(1)
+            gdf['supertrend_signal'] = 0
+            
+            # Trend change signals
+            for i in range(1, len(gdf)):
+                if gdf['trend_changed'][i]:
+                    if gdf['trend'][i] == 1:
+                        gdf['supertrend_signal'][i] = 1  # Buy signal
+                    else:
+                        gdf['supertrend_signal'][i] = -1  # Sell signal
+            
+            # Store the upper and lower bands
+            gdf['supertrend_upper'] = gdf['final_upper_band'] 
+            gdf['supertrend_lower'] = gdf['final_lower_band']
+            
+            # Convert back to pandas
+            result_df = gdf[[
+                'open', 'high', 'low', 'close', 'volume',
+                'trend', 'trend_changed', 'supertrend', 
+                'supertrend_signal', 'supertrend_upper', 'supertrend_lower'
+            ]].to_pandas()
+            
+            return result_df
+            
+        except Exception as e:
+            self._log('error', f"CUDF calculation error: {str(e)}")
+            self._log('info', "Falling back to CPU implementation")
+            return self._calculate_cpu(df, atr_length, factor, buffer_multiplier)
+    
+    def _calculate_numba(self, df: pd.DataFrame, 
+                       atr_length: int,
+                       factor: float,
+                       buffer_multiplier: float) -> pd.DataFrame:
+        """Calculate SuperTrend using Numba JIT compilation"""
+        try:
+            import numpy as np
+            from numba import njit, prange
+            
+            # Create a copy of input dataframe
+            result_df = df.copy()
+            
+            # Calculate ATR using pandas first
+            tr1 = result_df['high'] - result_df['low']
+            tr2 = abs(result_df['high'] - result_df['close'].shift(1))
+            tr3 = abs(result_df['low'] - result_df['close'].shift(1))
+            result_df['tr'] = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+            result_df['atr'] = result_df['tr'].rolling(window=atr_length).mean()
+            
+            # Calculate median price
+            result_df['median_price'] = (result_df['high'] + result_df['low']) / 2
+            
+            # Basic bands
+            result_df['basic_upper_band'] = result_df['median_price'] + factor * result_df['atr']
+            result_df['basic_lower_band'] = result_df['median_price'] - factor * result_df['atr']
+            
+            # Get numpy arrays for numba processing
+            close = result_df['close'].values
+            basic_upper = result_df['basic_upper_band'].values
+            basic_lower = result_df['basic_lower_band'].values
+            atr = result_df['atr'].values
+            
+            # Define numba functions
+            @njit
+            def calculate_final_bands_numba(basic_bands, close_values, atr_values, buffer_mult, is_upper=True):
+                n = len(basic_bands)
+                final_bands = np.zeros(n)
+                
+                # First value
+                final_bands[0] = basic_bands[0]
+                
+                # Calculate rest
+                for i in range(1, n):
+                    if is_upper:
+                        if ((basic_bands[i] < final_bands[i-1]) or 
+                            (close_values[i-1] > final_bands[i-1])):
+                            final_bands[i] = basic_bands[i]
+                        else:
+                            final_bands[i] = final_bands[i-1]
+                            
+                        # Apply buffer when switching trends
+                        if buffer_mult > 0 and close_values[i-1] > final_bands[i-1]:
+                            buffer_val = buffer_mult * atr_values[i]
+                            final_bands[i] = final_bands[i] + buffer_val
+                    else:
+                        if ((basic_bands[i] > final_bands[i-1]) or 
+                            (close_values[i-1] < final_bands[i-1])):
+                            final_bands[i] = basic_bands[i]
+                        else:
+                            final_bands[i] = final_bands[i-1]
+                            
+                        # Apply buffer when switching trends
+                        if buffer_mult > 0 and close_values[i-1] < final_bands[i-1]:
+                            buffer_val = buffer_mult * atr_values[i]
+                            final_bands[i] = final_bands[i] - buffer_val
+                
+                return final_bands
+            
+            @njit
+            def calculate_trend_numba(close_values, upper_bands, lower_bands):
+                n = len(close_values)
+                trend = np.zeros(n, dtype=np.int32)
+                
+                # First value initialization
+                if close_values[0] > upper_bands[0]:
+                    trend[0] = 1
+                elif close_values[0] < lower_bands[0]:
+                    trend[0] = -1
+                    
+                # Calculate rest
+                for i in range(1, n):
+                    if close_values[i] > upper_bands[i-1]:
+                        trend[i] = 1
+                    elif close_values[i] < lower_bands[i-1]:
+                        trend[i] = -1
+                    else:
+                        trend[i] = trend[i-1]
+                
+                return trend
+            
+            @njit
+            def calculate_supertrend_numba(trend, upper_bands, lower_bands):
+                n = len(trend)
+                supertrend = np.zeros(n)
+                
+                for i in range(n):
+                    if trend[i] == 1:
+                        supertrend[i] = lower_bands[i]
+                    else:
+                        supertrend[i] = upper_bands[i]
+                
+                return supertrend
+            
+            @njit
+            def calculate_signals_numba(trend):
+                n = len(trend)
+                changed = np.zeros(n, dtype=np.bool_)
+                signals = np.zeros(n, dtype=np.int32)
+                
+                # First value can't have changed
+                changed[0] = False
+                
+                # Calculate trend changes and signals
+                for i in range(1, n):
+                    if trend[i] != trend[i-1]:
+                        changed[i] = True
+                        if trend[i] == 1:
+                            signals[i] = 1  # Buy signal
+                        else:
+                            signals[i] = -1  # Sell signal
+                
+                return changed, signals
+            
+            # Execute numba functions
+            final_upper = calculate_final_bands_numba(basic_upper, close, atr, buffer_multiplier, True)
+            final_lower = calculate_final_bands_numba(basic_lower, close, atr, buffer_multiplier, False)
+            trend = calculate_trend_numba(close, final_upper, final_lower)
+            supertrend = calculate_supertrend_numba(trend, final_upper, final_lower)
+            trend_changed, signals = calculate_signals_numba(trend)
+            
+            # Assign results to dataframe
+            result_df['final_upper_band'] = final_upper
+            result_df['final_lower_band'] = final_lower
+            result_df['trend'] = trend
+            result_df['supertrend'] = supertrend
+            result_df['trend_changed'] = trend_changed
+            result_df['supertrend_signal'] = signals
+            
+            # Store the upper and lower bands
+            result_df['supertrend_upper'] = result_df['final_upper_band']
+            result_df['supertrend_lower'] = result_df['final_lower_band']
+            
+            # Clean up intermediate columns
+            result_df.drop(['tr', 'atr', 'median_price', 'basic_upper_band', 
+                          'basic_lower_band', 'final_upper_band', 'final_lower_band'], 
+                         axis=1, inplace=True)
+            
+            return result_df
+            
+        except Exception as e:
+            self._log('error', f"Numba calculation error: {str(e)}")
+            self._log('info', "Falling back to CPU implementation")
+            return self._calculate_cpu(df, atr_length, factor, buffer_multiplier)
+    
+    def _calculate_final_bands(self, basic_band: pd.Series, 
+                             close: pd.Series, 
+                             band_type: str,
+                             buffer_multiplier: float = 0) -> pd.Series:
+        """
+        Calculate final bands with logical conditions and buffers
+        """
+        final_band = pd.Series(0.0, index=basic_band.index)
         
-        # For medium data, try GPU if available
-        elif data_size > 1000:
-            if self.has_gpu:
-                self._log('info', "Using GPU implementation for medium dataset")
-                return self.gpu_implementation.calculate(df, atr_length, factor, buffer_multiplier)
+        # First value initialization
+        final_band.iloc[0] = basic_band.iloc[0]
         
-        # For small data or no GPU, use CPU
-        self._log('info', "Using CPU implementation")
-        return self.cpu_implementation.calculate(df, atr_length, factor, buffer_multiplier)
-		
-		
+        # Process the series
+        for i in range(1, len(basic_band)):
+            if band_type == 'upper':
+                if ((basic_band.iloc[i] < final_band.iloc[i-1]) or 
+                    (close.iloc[i-1] > final_band.iloc[i-1])):
+                    final_band.iloc[i] = basic_band.iloc[i]
+                else:
+                    final_band.iloc[i] = final_band.iloc[i-1]
+                    
+                # Apply buffer when switching trends
+                if buffer_multiplier > 0 and close.iloc[i-1] > final_band.iloc[i-1]:
+                    buffer_val = buffer_multiplier * (basic_band.iloc[i] - basic_band.iloc[i] + 
+                                                     (basic_band.iloc[i] - basic_band.iloc[0]) / i)
+                    final_band.iloc[i] = final_band.iloc[i] + buffer_val
+            else:  # Lower band
+                if ((basic_band.iloc[i] > final_band.iloc[i-1]) or 
+                    (close.iloc[i-1] < final_band.iloc[i-1])):
+                    final_band.iloc[i] = basic_band.iloc[i]
+                else:
+                    final_band.iloc[i] = final_band.iloc[i-1]
+                    
+                # Apply buffer when switching trends
+                if buffer_multiplier > 0 and close.iloc[i-1] < final_band.iloc[i-1]:
+                    buffer_val = buffer_multiplier * (basic_band.iloc[i] - basic_band.iloc[i] + 
+                                                     (basic_band.iloc[0] - basic_band.iloc[i]) / i)
+                    final_band.iloc[i] = final_band.iloc[i] - buffer_val
+        
+        return final_band
+    
+    def _calculate_trend(self, close: pd.Series, 
+                       upper_band: pd.Series, 
+                       lower_band: pd.Series) -> pd.Series:
+        """
+        Calculate trend direction based on price and bands
+        """
+        trend = pd.Series(0, index=close.index)
+        
+        # First value initialization based on first candle
+        if close.iloc[0] > upper_band.iloc[0]:
+            trend.iloc[0] = 1
+        elif close.iloc[0] < lower_band.iloc[0]:
+            trend.iloc[0] = -1
+        
+        # Process remaining values
+        for i in range(1, len(close)):
+            if close.iloc[i] > upper_band.iloc[i-1]:
+                trend.iloc[i] = 1
+            elif close.iloc[i] < lower_band.iloc[i-1]:
+                trend.iloc[i] = -1
+            else:
+                trend.iloc[i] = trend.iloc[i-1]
+        
+        return trend
+    
+    def _calculate_supertrend_signals(self, df: pd.DataFrame) -> None:
+        """
+        Calculate SuperTrend, trend changes and signals
+        """
+        # Calculate SuperTrend line
+        df['supertrend'] = 0.0
+        for i in range(len(df)):
+            if df['trend'].iloc[i] == 1:
+                df.loc[df.index[i], 'supertrend'] = df['final_lower_band'].iloc[i]
+            else:
+                df.loc[df.index[i], 'supertrend'] = df['final_upper_band'].iloc[i]
+        
+        # Detect trend changes
+        df['trend_changed'] = df['trend'] != df['trend'].shift(1)
+        
+        # Generate signals
+        df['supertrend_signal'] = 0
+        df.loc[df['trend_changed'] & (df['trend'] == 1), 'supertrend_signal'] = 1     # Buy signals
+        df.loc[df['trend_changed'] & (df['trend'] == -1), 'supertrend_signal'] = -1   # Sell signals
+        
+        # Store the upper and lower bands
+        df['supertrend_upper'] = df['final_upper_band']
+        df['supertrend_lower'] = df['final_lower_band']
+    
+    def _ensure_gpu_context(self):
+        """
+        Create or reuse GPU context for calculations
+        """
+        if self._gpu_context is None and HAS_CUDF:
+            try:
+                import cudf
+                # Simple test to initialize context
+                test_df = cudf.DataFrame({'a': [1, 2, 3]})
+                test_result = test_df['a'].sum()
+                self._gpu_context = True
+                self._log('debug', "GPU context initialized successfully")
+            except Exception as e:
+                self._log('error', f"Failed to initialize GPU context: {str(e)}")
+                self._gpu_context = False
+    
+    def cleanup_resources(self):
+        """
+        Clean up GPU resources if used
+        """
+        if HAS_CUDF and self._gpu_context:
+            try:
+                import cudf
+                import rmm
+                
+                # Clear any cached allocations
+                if hasattr(rmm, 'reinitialize'):
+                    self._log('debug', "Cleaning up GPU memory with RMM reinitialize")
+                    rmm.reinitialize()
+                    
+                self._log('info', "GPU resources cleaned up")
+            except Exception as e:
+                self._log('warning', f"Error cleaning up GPU resources: {str(e)}")   
+
+
+
 # ==============================================================================
 # BACKTESTING ENGINE
 # ==============================================================================
@@ -2550,7 +3229,7 @@ class MonteCarloSimulation:
             random.shuffle(trade_list)
         
         # Run simulations in parallel
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [
                 executor.submit(self._run_single_simulation, trade_list, i, initial_capital)
                 for i, trade_list in enumerate(trade_copies)
@@ -3368,6 +4047,8 @@ class Backtester:
 # OPTIMIZATION METHODS
 # ==============================================================================
 
+
+
 class GridSearchOptimizer:
     """
     Grid search optimization for parameter tuning
@@ -3375,7 +4056,7 @@ class GridSearchOptimizer:
     
     def __init__(self, log_manager: LogManager = None, progress_callback=None):
         self.log = log_manager
-        self.current_utc = "2025-06-25 15:32:08"  # Updated timestamp
+        self.current_utc = "2025-06-27 18:59:01"  # Updated timestamp
         self.current_user = "arullr001"           # Updated username
         self.progress_callback = progress_callback  # Add progress callback
         
@@ -3399,7 +4080,9 @@ class GridSearchOptimizer:
                 optimization_metric: str = 'profit_factor',
                 min_trades: int = 10,
                 time_exit_hours: float = 48.0,
-                parallelism: str = 'thread') -> Dict[str, Any]:
+                parallelism: str = 'thread',
+                force_implementation: str = None,
+                precomputed_patterns: Dict = None) -> Dict[str, Any]:
         """
         Run exhaustive grid search optimization for SuperTrend parameters
         
@@ -3410,6 +4093,8 @@ class GridSearchOptimizer:
             min_trades: Minimum number of trades required for a valid result
             time_exit_hours: Exit trade after this many hours
             parallelism: Type of parallelism ('thread', 'process', 'dask', 'none')
+            force_implementation: Force specific SuperTrend implementation
+            precomputed_patterns: Precomputed patterns for GPU optimization
             
         Returns:
             Dictionary with optimization results
@@ -3430,6 +4115,9 @@ class GridSearchOptimizer:
         
         self._log('info', f"Testing {total_combinations} parameter combinations using {parallelism} parallelism")
         
+        # Always force thread parallelism for better GPU utilization
+        parallelism = "thread"
+        
         # Send initial progress update
         if self.progress_callback:
             self.progress_callback({
@@ -3442,9 +4130,13 @@ class GridSearchOptimizer:
                 'top_combinations': []
             })
         
-        # Choose execution method based on parallelism type
+        
+        # Choose execution method
         if parallelism == 'thread':
-            results = self._run_threaded(df, param_combinations, optimization_metric, min_trades, time_exit_hours)
+            results = self._run_threaded(
+                df, param_combinations, optimization_metric, 
+                min_trades, time_exit_hours, force_implementation, precomputed_patterns
+            )
         elif parallelism == 'process':
             results = self._run_multiprocess(df, param_combinations, optimization_metric, min_trades, time_exit_hours)
         elif parallelism == 'dask' and HAS_DASK:
@@ -3509,7 +4201,31 @@ class GridSearchOptimizer:
         
         self._log('info', f"Grid search optimization completed: {len(valid_results)} valid combinations out of {total_combinations} in {execution_time:.2f} seconds")
         
+        # Create a compatible result object with the expected .x attribute
+        from types import SimpleNamespace
+        result_obj = SimpleNamespace()
+    
+        # Set the .x attribute to the best parameters found
+        if valid_results and best_result:
+            result_obj.x = [
+                best_result['parameters'].get('atr_length', 14),
+                best_result['parameters'].get('factor', 3.0),
+                best_result['parameters'].get('buffer_multiplier', 0.3),
+                best_result['parameters'].get('hard_stop_distance', 50)
+            ]
+            result_obj.fun = -best_result['performance'].get(optimization_metric, 0)
+        else:
+            # Default values if no valid results
+            result_obj.x = [14, 3.0, 0.3, 50]  # Default parameters
+            result_obj.fun = 0
+        
+        return result_obj  # Return the compatible object instead of the results dictionary
+        
+        
         return optimization_results
+        
+        
+        
     
     def _get_top_combinations(self, results, optimization_metric, top_n=5):
         """Extract top combinations from results for progress updates"""
@@ -3577,57 +4293,107 @@ class GridSearchOptimizer:
                 })
         
         return results
+
+    def determine_batch_size(self, total_combinations: int) -> int:
+        """Dynamically determine optimal batch size based on system characteristics"""
+        # Base sizing on available cores and total workload
+        cores = max(1, CPU_THREADS)
+        
+        # For small workloads, use smaller batches for more responsive feedback
+        if total_combinations <= 100:
+            return max(1, total_combinations // 20)
+            
+        # For medium workloads, create approximately 3-4x as many batches as cores
+        if total_combinations <= 1000:
+            optimal_batches = cores * 3
+            return max(5, total_combinations // optimal_batches)
+            
+        # For larger workloads, create approximately 2-3x as many batches as cores
+        optimal_batches = cores * 2
+        batch_size = max(10, total_combinations // optimal_batches)
+        
+        # Cap batch size to ensure responsiveness and prevent memory issues
+        return min(batch_size, 50)
     
     def _run_threaded(self, df: pd.DataFrame, param_combinations: List[Tuple], 
-                    optimization_metric: str, min_trades: int, time_exit_hours: float) -> List[Dict]:
-        """Run optimization using thread parallelism"""
+                    optimization_metric: str, min_trades: int, time_exit_hours: float,
+                    force_implementation: str = None, precomputed_patterns: Dict = None) -> List[Dict]:
+        """Run optimization using thread parallelism with optimized GPU usage"""
         self._log('info', f"Running optimization with ThreadPoolExecutor using {CPU_THREADS} workers")
+
+        # Create shared SuperTrend calculator once for all threads
+        shared_supertrend = SuperTrend(self.log)
         
-        results = [None] * len(param_combinations)
+        results = []
         total = len(param_combinations)
         completed = 0
         valid_count = 0
         start_time = time.time()
-        
+
         # Thread-safe counter for progress updates
         counter_lock = threading.Lock()
         
-        def process_combination(idx, params):
-            print(f"Thread {threading.current_thread().name}: Processing combination {idx}: {params}")
-            ...
-            
-            nonlocal completed, valid_count
-            atr_length, factor, buffer, stop = params
-            
-            # Process the combination
-            result = self._evaluate_combination(df, atr_length, factor, buffer, stop, min_trades, time_exit_hours)
-            results[idx] = result
-            
-            # Update progress counters
-            with counter_lock:
-                completed += 1
-                if result:
-                    valid_count += 1
-                
-                # Send progress update at regular intervals
-                if completed % max(10, total // 20) == 0 and self.progress_callback:
-                    elapsed = time.time() - start_time
-                    progress_pct = completed / total * 100
-                    remaining = (elapsed / completed) * (total - completed) if completed > 0 else 0
-                    
-                    # Get valid results so far
-                    valid_results = [r for r in results if r is not None]
-                    
-                    self.progress_callback({
-                        'completed': completed,
-                        'total': total,
-                        'progress_pct': progress_pct,
-                        'elapsed': elapsed,
-                        'remaining': remaining,
-                        'valid_results': valid_count,
-                        'top_combinations': self._get_top_combinations(valid_results, optimization_metric)
-                    })
+        # Determine optimal batch size
+        batch_size = self.determine_batch_size(total)
+        self._log('info', f"Using dynamic batch size of {batch_size} for {total} combinations")
+        print(f"Dynamic batch size: {batch_size} (UTC: {self.current_utc}, User: {self.current_user})")
         
+        # Batch param combinations
+        batched_params = [param_combinations[i:i+batch_size] for i in range(0, len(param_combinations), batch_size)]
+        
+        def process_batch(batch_idx, batch):
+            nonlocal completed, valid_count
+            batch_results = []
+            
+            # Process each combination individually with progress updates
+            for params in batch:
+                atr_length, factor, buffer, stop = params
+                
+                # Process with shared SuperTrend instance and GPU implementation
+                result = self._evaluate_combination(
+                    df, atr_length, factor, buffer, stop, 
+                    min_trades, time_exit_hours, 
+                    shared_supertrend, force_implementation, precomputed_patterns
+                )
+                
+                # Update progress after each combination
+                with counter_lock:
+                    completed += 1
+                    if result:
+                        batch_results.append(result)
+                        valid_count += 1
+                    
+                    # Update progress every few combinations to reduce overhead
+                    if completed % 5 == 0 and self.progress_callback:
+                        elapsed = time.time() - start_time
+                        progress_pct = completed / total * 100
+                        remaining = (elapsed / completed) * (total - completed) if completed > 0 else 0
+                        
+                        # Only get top combinations occasionally to reduce overhead
+                        show_top_combos = (completed % 20 == 0)
+                        
+                        top_combos = []
+                        if show_top_combos:
+                            # Get current top combinations
+                            all_results_snapshot = list(results)
+                            all_results_snapshot.extend(batch_results)
+                            top_combos = self._get_top_combinations(all_results_snapshot, optimization_metric)
+                        
+                        self.progress_callback({
+                            'completed': completed,
+                            'total': total,
+                            'progress_pct': progress_pct,
+                            'elapsed': elapsed,
+                            'remaining': remaining,
+                            'valid_results': valid_count,
+                            'top_combinations': top_combos
+                        })
+            
+            return batch_results
+
+        # Create a thread pool with optimal thread count for your system
+        max_workers = min(16, CPU_THREADS)  # Limit to reasonable number
+
         # Send initial progress update
         if self.progress_callback:
             self.progress_callback({
@@ -3639,18 +4405,18 @@ class GridSearchOptimizer:
                 'valid_results': 0,
                 'top_combinations': []
             })
+
+        # Process batches in the thread pool
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all batches to be processed
+            futures = {executor.submit(process_batch, i, batch): i for i, batch in enumerate(batched_params)}
         
-        # Create a thread pool and submit all tasks
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            # Submit all combinations to the executor
-            futures = [executor.submit(process_combination, idx, params) 
-                     for idx, params in enumerate(param_combinations)]
-            
-            # Wait for all tasks to complete
-            concurrent.futures.wait(futures)
-        
-        # Filter out None results and return
-        return [r for r in results if r is not None]
+            # Process results as they complete
+            for future in concurrent.futures.as_completed(futures):
+                batch_results = future.result()
+                results.extend(batch_results)
+
+        return results
     
     def _run_multiprocess(self, df: pd.DataFrame, param_combinations: List[Tuple], 
                         optimization_metric: str, min_trades: int, time_exit_hours: float) -> List[Dict]:
@@ -3660,108 +4426,6 @@ class GridSearchOptimizer:
         # Change to use thread parallelism instead if having issues with process parallelism
         self._log('info', "Falling back to thread parallelism due to potential multiprocessing issues")
         return self._run_threaded(df, param_combinations, optimization_metric, min_trades, time_exit_hours)
-        
-        # Calculate memory usage
-        df_size = sys.getsizeof(df) / (1024 * 1024)  # Size in MB
-        available_ram = psutil.virtual_memory().available / (1024 * 1024)  # Available RAM in MB
-        memory_per_worker = df_size + 10  # Add overhead
-        
-        self._log('debug', f"Memory per worker: {memory_per_worker:.1f} MB, Available RAM: {available_ram:.1f} MB")
-        
-        total = len(param_combinations)
-        start_time = time.time()
-        
-        # Save dataframe to temporary file to avoid pickling issues
-        with tempfile.NamedTemporaryFile(suffix='.parquet', delete=False) as tmp:
-            df_path = tmp.name
-            df.to_parquet(df_path)
-        
-        try:
-            # Create shared results list and counters using Manager
-            manager = multiprocessing.Manager()
-            results = manager.list()
-            shared_counter = manager.Value('i', 0)
-            valid_counter = manager.Value('i', 0)
-            
-            # Define worker function
-            def process_batch(batch):
-                batch_results = []
-                batch_valid = 0
-                
-                for atr_length, factor, buffer, stop in batch:
-                    result = self._evaluate_combination_mp(
-                        df_path, atr_length, factor, buffer, stop, 
-                        min_trades, time_exit_hours
-                    )
-                    
-                    if result:
-                        batch_results.append(result)
-                        batch_valid += 1
-                
-                # Update shared counters
-                with shared_counter.get_lock():
-                    shared_counter.value += len(batch)
-                
-                with valid_counter.get_lock():
-                    valid_counter.value += batch_valid
-                
-                # Update results list
-                results.extend(batch_results)
-                
-                # Send progress update
-                if self.progress_callback:
-                    completed = shared_counter.value
-                    valid_count = valid_counter.value
-                    elapsed = time.time() - start_time
-                    progress_pct = completed / total * 100
-                    remaining = (elapsed / completed) * (total - completed) if completed > 0 else 0
-                    
-                    # Get safe copy of results for display
-                    result_copy = list(results)
-                    
-                    self.progress_callback({
-                        'completed': completed,
-                        'total': total,
-                        'progress_pct': progress_pct,
-                        'elapsed': elapsed,
-                        'remaining': remaining,
-                        'valid_results': valid_count,
-                        'top_combinations': self._get_top_combinations(result_copy, optimization_metric)
-                    })
-            
-            # Calculate batch size based on number of workers
-            batch_size = max(1, min(500, total // (CPU_THREADS * 4)))
-            batches = [param_combinations[i:i+batch_size] for i in range(0, total, batch_size)]
-            
-            # Send initial progress update
-            if self.progress_callback:
-                self.progress_callback({
-                    'completed': 0,
-                    'total': total,
-                    'progress_pct': 0,
-                    'elapsed': 0,
-                    'remaining': 0,
-                    'valid_results': 0,
-                    'top_combinations': []
-                })
-            
-            # Process batches using ProcessPoolExecutor
-            with concurrent.futures.ProcessPoolExecutor(max_workers=CPU_THREADS) as executor:
-                # Submit all batches to the executor
-                futures = [executor.submit(process_batch, batch) for batch in batches]
-                
-                # Wait for all tasks to complete
-                concurrent.futures.wait(futures)
-            
-            # Convert manager list to regular list
-            return list(results)
-            
-        finally:
-            # Clean up temporary file
-            try:
-                os.unlink(df_path)
-            except:
-                pass
     
     def _run_dask(self, df: pd.DataFrame, param_combinations: List[Tuple], 
                 optimization_metric: str, min_trades: int, time_exit_hours: float) -> List[Dict]:
@@ -3770,111 +4434,52 @@ class GridSearchOptimizer:
             self._log('error', "Dask not available for distributed computing")
             return self._run_sequential(df, param_combinations, optimization_metric, min_trades, time_exit_hours)
         
-        self._log('info', "Running optimization with Dask")
-        
-        total = len(param_combinations)
-        start_time = time.time()
-        
-        # Save dataframe to temporary file for Dask workers
-        with tempfile.NamedTemporaryFile(suffix='.parquet', delete=False) as tmp:
-            df_path = tmp.name
-            df.to_parquet(df_path)
-        
-        try:
-            # Define task function for Dask
-            def evaluate_task(params):
-                atr_length, factor, buffer, stop = params
-                return self._evaluate_combination_mp(df_path, atr_length, factor, buffer, stop, min_trades, time_exit_hours)
-            
-            # Create a Dask bag from parameter combinations
-            bag = db.from_sequence(param_combinations)
-            
-            # Set up progress tracking
-            progress = 0
-            valid_count = 0
-            results = []
-            
-            # Function to track progress with callback
-            def on_completed(result):
-                nonlocal progress, valid_count, results
-                progress += 1
-                
-                if result:
-                    valid_count += 1
-                    results.append(result)
-                
-                # Send progress update at regular intervals
-                if progress % max(10, total // 20) == 0 and self.progress_callback:
-                    elapsed = time.time() - start_time
-                    progress_pct = progress / total * 100
-                    remaining = (elapsed / progress) * (total - progress) if progress > 0 else 0
-                    
-                    self.progress_callback({
-                        'completed': progress,
-                        'total': total,
-                        'progress_pct': progress_pct,
-                        'elapsed': elapsed,
-                        'remaining': remaining,
-                        'valid_results': valid_count,
-                        'top_combinations': self._get_top_combinations(results, optimization_metric)
-                    })
-            
-            # Send initial progress update
-            if self.progress_callback:
-                self.progress_callback({
-                    'completed': 0,
-                    'total': total,
-                    'progress_pct': 0,
-                    'elapsed': 0,
-                    'remaining': 0,
-                    'valid_results': 0,
-                    'top_combinations': []
-                })
-            
-            # Map the evaluation function onto the bag
-            result_bag = bag.map(evaluate_task)
-            
-            # Process results with progress callback
-            results = []
-            with ProgressBar():
-                for result in result_bag:
-                    if result:
-                        results.append(result)
-                    
-                    # Call progress callback
-                    on_completed(result)
-            
-            return results
-            
-        finally:
-            # Clean up temporary file
-            try:
-                os.unlink(df_path)
-            except:
-                pass
+        # Fallback to threaded implementation as it's more reliable with GPU
+        self._log('info', "Using threaded implementation instead of Dask for better GPU coordination")
+        return self._run_threaded(df, param_combinations, optimization_metric, min_trades, time_exit_hours)
     
     def _evaluate_combination(self, df: pd.DataFrame, atr_length: int, factor: float, 
                            buffer_multiplier: float, hard_stop_distance: float,
-                           min_trades: int, time_exit_hours: float) -> Dict[str, Any]:
+                           min_trades: int, time_exit_hours: float,
+                           shared_supertrend=None, force_implementation=None,
+                           precomputed_patterns=None) -> Dict[str, Any]:
         """
-        Evaluate a single parameter combination
+        Evaluate a single parameter combination with GPU optimization
         
         Returns a dictionary with parameters and performance metrics, or None if invalid
         """
+        start_time = time.time()
+        MAX_EVAL_TIME = 300  # 5 minutes max per evaluation
+        
         try:
-            # Run backtest with the given parameters
-            result = self.backtester.run_backtest(
+            # Use shared SuperTrend instance if provided
+            supertrend_instance = shared_supertrend or SuperTrend(self.log)
+            
+            # Calculate SuperTrend with forced GPU implementation
+            df_st = supertrend_instance.calculate(
                 df,
                 atr_length=atr_length,
                 factor=factor,
                 buffer_multiplier=buffer_multiplier,
-                hard_stop_distance=hard_stop_distance,
-                time_exit_hours=time_exit_hours
+                force_implementation=force_implementation or 'gpu',
+                precomputed_patterns=precomputed_patterns
+            )
+            
+            # Process signals to get trades
+            trade_processor = TradeProcessor(self.log)
+            trades = trade_processor.process_supertrend_signals(
+                df_st, 
+                hard_stop_distance, 
+                time_exit_hours
             )
             
             # Check if the result meets minimum trade criteria
-            if result['performance']['trade_count'] < min_trades:
+            if len(trades) < min_trades:
                 return None
+            
+            # Calculate performance metrics
+            performance_calculator = PerformanceCalculator(self.log)
+            performance = performance_calculator.calculate_performance(trades)
             
             # Return formatted result
             return {
@@ -3884,8 +4489,8 @@ class GridSearchOptimizer:
                     'buffer_multiplier': buffer_multiplier,
                     'hard_stop_distance': hard_stop_distance
                 },
-                'performance': result['performance'],
-                'trade_count': result['performance']['trade_count']
+                'performance': performance,
+                'trade_count': len(trades)
             }
             
         except Exception as e:
@@ -3912,8 +4517,8 @@ class GridSearchOptimizer:
             trade_processor = TradeProcessor()
             performance_calculator = PerformanceCalculator()
             
-            # Calculate supertrend
-            df_st = supertrend.calculate(df, atr_length, factor, buffer_multiplier)
+            # Calculate supertrend with GPU
+            df_st = supertrend.calculate(df, atr_length, factor, buffer_multiplier, force_implementation='gpu')
             
             # Process signals to get trades
             trades = trade_processor.process_supertrend_signals(df_st, hard_stop_distance, time_exit_hours)
@@ -3941,6 +4546,7 @@ class GridSearchOptimizer:
             print(f"Error in MP evaluation: {str(e)}")
             return None
 
+
 class BayesianOptimizer:
     """
     Bayesian optimization for efficient parameter tuning using scikit-optimize
@@ -3948,14 +4554,14 @@ class BayesianOptimizer:
     
     def __init__(self, log_manager: LogManager = None, progress_callback=None):
         self.log = log_manager
-        self.current_utc = "2025-06-25 14:59:21"  # Updated timestamp
+        self.current_utc = "2025-06-27 19:02:03"  # Updated timestamp
         self.current_user = "arullr001"           # Updated username
         self.progress_callback = progress_callback  # Add progress callback
         
         # Initialize components
-        self.supertrend = SuperTrend(log_manager)
-        self.trade_processor = TradeProcessor(log_manager)
-        self.performance_calculator = PerformanceCalculator(log_manager)
+        self.supertrend = None  # Will initialize once for all evaluations
+        self.trade_processor = None
+        self.performance_calculator = None
         
         # Check if skopt is available
         if not HAS_SKOPT:
@@ -3973,13 +4579,37 @@ class BayesianOptimizer:
             elif level == 'error':
                 self.log.error(message)
     
+    def _evaluate_batch(self, params_batch):
+        """Evaluate a batch of parameters using thread parallelism"""
+        results = []
+    
+        # Use thread pooling with reasonable number of workers
+        max_workers = min(16, CPU_THREADS)
+    
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Map the evaluation function to all parameters in the batch
+            future_to_params = {executor.submit(self._evaluate_parameters, params): params 
+                               for params in params_batch}
+        
+            # Process results as they complete
+            for future in concurrent.futures.as_completed(future_to_params):
+                try:
+                    result = future.result()
+                    if result:
+                        results.append(result)
+                except Exception as e:
+                    self._log('error', f"Error in batch evaluation: {str(e)}")
+                    
+        return results
+    
     def optimize(self, df: pd.DataFrame, 
                 param_ranges: Dict[str, Tuple[float, float]],
                 optimization_metric: str = 'profit_factor',
                 min_trades: int = 10,
                 time_exit_hours: float = 48.0,
                 n_calls: int = 50,
-                n_random_starts: int = 10) -> Dict[str, Any]:
+                n_random_starts: int = 10,
+                force_implementation: str = 'gpu') -> Dict[str, Any]:
         """
         Run Bayesian optimization for SuperTrend parameters
         
@@ -3991,6 +4621,7 @@ class BayesianOptimizer:
             time_exit_hours: Exit trade after this many hours
             n_calls: Number of total optimization steps
             n_random_starts: Number of random initial points
+            force_implementation: Force specific ST implementation (default: 'gpu')
             
         Returns:
             Dictionary with optimization results
@@ -4047,11 +4678,31 @@ class BayesianOptimizer:
             space.append(Integer(10, 50, name='stop'))
             param_names.append('hard_stop_distance')
         
+        # Initialize components once for all evaluations
+        self.supertrend = SuperTrend(self.log)
+        self.trade_processor = TradeProcessor(self.log)
+        self.performance_calculator = PerformanceCalculator(self.log)
+        
+        
+        
+        
+        # Prepare GPU for optimization by running a dummy calculation
+        self._log('info', "Precomputing GPU patterns for optimization...")
+        try:
+            # Compute reusable patterns once for optimization
+            precomputed_patterns = self.supertrend.precompute_patterns(df)
+            self._log('info', "GPU patterns precomputed successfully")
+        except Exception as e:
+            self._log('warning', f"Could not precompute GPU patterns: {str(e)}")
+            precomputed_patterns = None
+        
         # Store copy of data
         self.df = df
         self.min_trades = min_trades
         self.time_exit_hours = time_exit_hours
         self.optimization_metric = optimization_metric
+        self.force_implementation = force_implementation
+        self.precomputed_patterns = precomputed_patterns
         
         # Storage for evaluated results to track progress
         self.evaluated_results = []
@@ -4069,6 +4720,9 @@ class BayesianOptimizer:
                 'top_combinations': []
             })
         
+        
+        
+        
         # Define the objective function to minimize (negative of our metric to maximize)
         def objective(params):
             # Create a dictionary of parameters
@@ -4084,8 +4738,12 @@ class BayesianOptimizer:
             evaluation_count = len(self.evaluated_results) + 1
             
             try:
-                # Calculate SuperTrend
-                df_st = self.supertrend.calculate(df, atr_length, factor, buffer)
+                # Calculate SuperTrend using shared instance and GPU
+                df_st = self.supertrend.calculate(
+                    self.df, atr_length, factor, buffer,
+                    force_implementation=self.force_implementation,
+                    precomputed_patterns=self.precomputed_patterns
+                )
                 
                 # Process signals to get trades
                 trades = self.trade_processor.process_supertrend_signals(df_st, stop, time_exit_hours)
@@ -4219,7 +4877,7 @@ class BayesianOptimizer:
         best_param_dict['hard_stop_distance'] = float(best_param_dict.get('hard_stop_distance', 50))
         
         # Run final evaluation with best parameters
-        final_result = self._evaluate_parameters(df, best_param_dict, time_exit_hours)
+        final_result = self._evaluate_parameters(best_param_dict)
         
         # Prepare results
         all_evaluations = []
@@ -4257,6 +4915,7 @@ class BayesianOptimizer:
                 'min_trades': min_trades,
                 'n_calls': n_calls,
                 'n_random_starts': n_random_starts,
+                'implementation': self.force_implementation,
                 'data_period': {
                     'start': df.index[0].strftime('%Y-%m-%d %H:%M:%S'),
                     'end': df.index[-1].strftime('%Y-%m-%d %H:%M:%S'),
@@ -4284,6 +4943,10 @@ class BayesianOptimizer:
                 'valid_results': self.valid_results_count,
                 'top_combinations': self._get_top_combinations()
             })
+        
+        # Explicitly clean up resources
+        if hasattr(self.supertrend, 'cleanup_resources'):
+            self.supertrend.cleanup_resources()
         
         self._log('info', f"Bayesian optimization completed in {execution_time:.2f} seconds")
         
@@ -4320,8 +4983,8 @@ class BayesianOptimizer:
         
         return top_combos
     
-    def _evaluate_parameters(self, df: pd.DataFrame, params: Dict[str, float], time_exit_hours: float) -> Dict[str, Any]:
-        """Evaluate a set of parameters"""
+    def _evaluate_parameters(self, params: Dict[str, float]) -> Dict[str, Any]:
+        """Evaluate a set of parameters using GPU optimization"""
         try:
             # Extract parameters
             atr_length = int(params.get('atr_length', 14))
@@ -4329,11 +4992,15 @@ class BayesianOptimizer:
             buffer = float(params.get('buffer_multiplier', 0.3))
             stop = float(params.get('hard_stop_distance', 50))
             
-            # Calculate SuperTrend
-            df_st = self.supertrend.calculate(df, atr_length, factor, buffer)
+            # Calculate SuperTrend with GPU
+            df_st = self.supertrend.calculate(
+                self.df, atr_length, factor, buffer, 
+                force_implementation=self.force_implementation,
+                precomputed_patterns=self.precomputed_patterns
+            )
             
             # Process signals to get trades
-            trades = self.trade_processor.process_supertrend_signals(df_st, stop, time_exit_hours)
+            trades = self.trade_processor.process_supertrend_signals(df_st, stop, self.time_exit_hours)
             
             # Calculate performance metrics
             performance = self.performance_calculator.calculate_performance(trades)
@@ -4347,6 +5014,510 @@ class BayesianOptimizer:
         except Exception as e:
             self._log('error', f"Error evaluating parameters: {str(e)}")
             return None
+
+
+class GeneticOptimizer:
+    """
+    Genetic Algorithm-based optimization for SuperTrend parameters
+    Uses DEAP (Distributed Evolutionary Algorithms in Python) for implementation
+    """
+    
+    def __init__(self, log_manager: LogManager = None, progress_callback=None):
+        self.log = log_manager
+        self.current_utc = "2025-06-27 19:08:30"  # Updated timestamp
+        self.current_user = "arullr001"           # Updated username
+        self.progress_callback = progress_callback  # Add progress callback
+        
+        # Initialize components - will be set during optimization
+        self.supertrend = None
+        self.trade_processor = None
+        self.performance_calculator = None
+        
+        # Check if DEAP is available
+        if not HAS_DEAP:
+            self._log('warning', "DEAP library not available, genetic optimization will not work")
+    
+    def _log(self, level: str, message: str):
+        """Log message if log_manager is available"""
+        if self.log:
+            if level == 'info':
+                self.log.info(message)
+            elif level == 'debug':
+                self.log.debug(message)
+            elif level == 'warning':
+                self.log.warning(message)
+            elif level == 'error':
+                self.log.error(message)
+    
+    def optimize(self, df: pd.DataFrame, 
+                param_ranges: Dict[str, Tuple[float, float]],
+                optimization_metric: str = 'profit_factor',
+                min_trades: int = 10,
+                time_exit_hours: float = 48.0,
+                population_size: int = 30,
+                generations: int = 10,
+                mutation_prob: float = 0.2,
+                crossover_prob: float = 0.7,
+                tournament_size: int = 3,
+                force_implementation: str = 'gpu') -> Dict[str, Any]:
+        """
+        Run Genetic Algorithm optimization for SuperTrend parameters
+        
+        Args:
+            df: DataFrame with OHLC data
+            param_ranges: Dictionary with parameter ranges as (min, max) tuples
+            optimization_metric: Metric to optimize ('profit_factor', 'win_rate', etc.)
+            min_trades: Minimum number of trades required for a valid result
+            time_exit_hours: Exit trade after this many hours
+            population_size: Size of the population in each generation
+            generations: Number of generations to evolve
+            mutation_prob: Probability of mutation
+            crossover_prob: Probability of crossover 
+            tournament_size: Size of tournament selection
+            force_implementation: Force specific SuperTrend implementation
+            
+        Returns:
+            Dictionary with optimization results
+        """
+        if not HAS_DEAP:
+            self._log('error', "DEAP library not available for genetic optimization")
+            return {'error': 'DEAP library not available'}
+        
+        self._log('info', f"Running Genetic Algorithm optimization using {optimization_metric} as target metric")
+        
+        start_time = time.time()
+        
+        # Initialize components for shared use
+        self.supertrend = SuperTrend(self.log)
+        self.trade_processor = TradeProcessor(self.log)
+        self.performance_calculator = PerformanceCalculator(self.log)
+        
+        # Store optimization settings as instance variables
+        self.df = df
+        self.min_trades = min_trades
+        self.time_exit_hours = time_exit_hours
+        self.optimization_metric = optimization_metric
+        self.population_size = population_size
+        self.generations = generations
+        
+        # Define parameter ranges
+        self.param_ranges = param_ranges
+        
+        # Prepare GPU implementation
+        self._log('info', "Precomputing GPU patterns for optimization...")
+        try:
+            # Compute reusable patterns once for optimization
+            self.precomputed_patterns = self.supertrend.precompute_patterns(df)
+            self._log('info', "GPU patterns precomputed successfully")
+        except Exception as e:
+            self._log('warning', f"Could not precompute GPU patterns: {str(e)}")
+            self.precomputed_patterns = None
+        
+        self.force_implementation = force_implementation
+        
+        # Storage for tracking progress
+        self.evaluated_individuals = 0
+        self.total_expected_evaluations = population_size * (generations + 1) # +1 for initial pop
+        self.valid_results_count = 0
+        self.all_individuals = []
+        
+        # Register DEAP types
+        creator.create("FitnessMax", base.Fitness, weights=(1.0,))
+        creator.create("Individual", list, fitness=creator.FitnessMax)
+        
+        # Define the genome (chromosome) structure
+        self.param_names = []
+        genome = []
+        
+        # ATR Length (integer)
+        if 'atr_length' in param_ranges:
+            min_val, max_val = param_ranges['atr_length']
+            genome.append((int(min_val), int(max_val), True))  # True for integer
+            self.param_names.append('atr_length')
+        else:
+            genome.append((10, 20, True))  # Default ATR Length
+            self.param_names.append('atr_length')
+        
+        # Factor (continuous)
+        if 'factor' in param_ranges:
+            min_val, max_val = param_ranges['factor']
+            genome.append((float(min_val), float(max_val), False))  # False for float
+            self.param_names.append('factor')
+        else:
+            genome.append((1.0, 5.0, False))  # Default Factor
+            self.param_names.append('factor')
+        
+        # Buffer (continuous)
+        if 'buffer' in param_ranges:
+            min_val, max_val = param_ranges['buffer']
+            genome.append((float(min_val), float(max_val), False))  # False for float
+            self.param_names.append('buffer_multiplier')
+        else:
+            genome.append((0.1, 0.5, False))  # Default Buffer
+            self.param_names.append('buffer_multiplier')
+        
+        # Stop (integer)
+        if 'stop' in param_ranges:
+            min_val, max_val = param_ranges['stop']
+            genome.append((int(min_val), int(max_val), True))  # True for integer
+            self.param_names.append('hard_stop_distance')
+        else:
+            genome.append((10, 50, True))  # Default Stop
+            self.param_names.append('hard_stop_distance')
+        
+        # Create toolbox
+        toolbox = base.Toolbox()
+        
+        # Create a compatible result object
+        from types import SimpleNamespace
+        opt_results = SimpleNamespace()
+        opt_results.x = best_params  # Your best parameters array
+        opt_results.fun = best_score  # The optimal score
+    
+        return opt_results  # Now has the .x attribute
+        
+        
+        # Register attribute generators
+        # Generate a random value within range, respecting int/float type
+        def generate_param(min_val, max_val, is_int):
+            if is_int:
+                return random.randint(min_val, max_val)
+            else:
+                return random.uniform(min_val, max_val)
+        
+        # Register the toolbox operations
+        for i, (min_val, max_val, is_int) in enumerate(genome):
+            # Attribute generators - one for each parameter
+            toolbox.register(f"attr_{i}", generate_param, min_val, max_val, is_int)
+        
+        # Structure initializers - create individual and population
+        # Initialize with all the attributes
+        attrs = [getattr(toolbox, f"attr_{i}") for i in range(len(genome))]
+        toolbox.register("individual", tools.initCycle, creator.Individual, tuple(attrs), n=1)
+        toolbox.register("population", tools.initRepeat, list, toolbox.individual)
+        
+        # Define evaluation function
+        def evaluate_individual(individual):
+            params = {}
+            
+            # Extract parameters with proper type conversion
+            for i, param_name in enumerate(self.param_names):
+                if genome[i][2]:  # If integer
+                    params[param_name] = int(individual[i])
+                else:
+                    params[param_name] = float(individual[i])
+            
+            # Update evaluated count
+            self.evaluated_individuals += 1
+            
+            # Calculate fitness
+            result = self._evaluate_parameters(params)
+            
+            if not result:
+                # If invalid, penalize the fitness
+                self.all_individuals.append({
+                    'parameters': params,
+                    'generation': 'initial' if self.evaluated_individuals <= population_size else 'evolved',
+                    'fitness': 0.0,
+                    'valid': False
+                })
+                
+                # Report progress
+                if self.progress_callback:
+                    elapsed = time.time() - start_time
+                    progress_pct = min(100, (self.evaluated_individuals / self.total_expected_evaluations) * 100)
+                    remaining = (elapsed / self.evaluated_individuals) * (self.total_expected_evaluations - self.evaluated_individuals) if self.evaluated_individuals > 0 else 0
+                    
+                    if self.evaluated_individuals % 5 == 0:  # Update every 5 evaluations
+                        self.progress_callback({
+                            'completed': self.evaluated_individuals,
+                            'total': self.total_expected_evaluations,
+                            'progress_pct': progress_pct,
+                            'elapsed': elapsed,
+                            'remaining': remaining,
+                            'valid_results': self.valid_results_count,
+                            'top_combinations': self._get_top_combinations()
+                        })
+                
+                return (0.0,)  # Return tuple for DEAP
+            
+            # Get fitness value
+            fitness_value = result['performance'].get(self.optimization_metric, 0.0)
+            
+            # Track valid result
+            self.valid_results_count += 1
+            self.all_individuals.append({
+                'parameters': params,
+                'generation': 'initial' if self.evaluated_individuals <= population_size else 'evolved',
+                'fitness': fitness_value,
+                'valid': True,
+                'performance': result['performance']
+            })
+            
+            # Report progress
+            if self.progress_callback:
+                elapsed = time.time() - start_time
+                progress_pct = min(100, (self.evaluated_individuals / self.total_expected_evaluations) * 100)
+                remaining = (elapsed / self.evaluated_individuals) * (self.total_expected_evaluations - self.evaluated_individuals) if self.evaluated_individuals > 0 else 0
+                
+                if self.evaluated_individuals % 5 == 0:  # Update every 5 evaluations
+                    self.progress_callback({
+                        'completed': self.evaluated_individuals,
+                        'total': self.total_expected_evaluations,
+                        'progress_pct': progress_pct,
+                        'elapsed': elapsed,
+                        'remaining': remaining,
+                        'valid_results': self.valid_results_count,
+                        'top_combinations': self._get_top_combinations()
+                    })
+            
+            return (fitness_value,)  # Return tuple for DEAP
+        
+        # Register evaluation function
+        toolbox.register("evaluate", evaluate_individual)
+        
+        # Genetic operators
+        # Tournament selection with tournament_size
+        toolbox.register("select", tools.selTournament, tournsize=tournament_size)
+        
+        # Multi-point crossover with crossover_prob probability
+        def custom_crossover(ind1, ind2):
+            for i in range(len(ind1)):
+                if random.random() < crossover_prob:
+                    ind1[i], ind2[i] = ind2[i], ind1[i]
+            return ind1, ind2
+        
+        toolbox.register("mate", custom_crossover)
+        
+        # Mutation with mutation_prob probability
+        def custom_mutate(individual):
+            for i, (min_val, max_val, is_int) in enumerate(genome):
+                if random.random() < mutation_prob:
+                    if is_int:
+                        individual[i] = random.randint(min_val, max_val)
+                    else:
+                        individual[i] = random.uniform(min_val, max_val)
+            return individual,
+            
+        toolbox.register("mutate", custom_mutate)
+        
+        # Initialize population
+        pop = toolbox.population(n=population_size)
+        
+        # Record initial population statistics
+        self._log('info', f"Initial population size: {len(pop)}")
+        
+        # Evaluate initial population in parallel batches
+        self._log('info', "Evaluating initial population using GPU optimization...")
+        
+        # Use thread pool to evaluate initial population
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(16, CPU_THREADS)) as executor:
+            fitnesses = list(executor.map(toolbox.evaluate, pop))
+            for ind, fit in zip(pop, fitnesses):
+                ind.fitness.values = fit
+        
+        # Signal start of evolution
+        self._log('info', f"Starting evolution for {generations} generations")
+        
+        # Begin the evolution
+        for g in range(generations):
+            # Select parents
+            offspring = toolbox.select(pop, len(pop))
+            
+            # Clone selected individuals
+            offspring = list(map(toolbox.clone, offspring))
+            
+            # Apply crossover and mutation
+            for i in range(1, len(offspring), 2):
+                # Crossover
+                if i < len(offspring) - 1:  # Check to avoid index error
+                    toolbox.mate(offspring[i-1], offspring[i])
+                    
+                    # Clear fitness values of modified individuals
+                    del offspring[i-1].fitness.values
+                    del offspring[i].fitness.values
+            
+            # Mutation with a controlled rate
+            for i in range(len(offspring)):
+                toolbox.mutate(offspring[i])
+                if not offspring[i].fitness.valid:
+                    del offspring[i].fitness.values
+            
+            # Evaluate offspring in parallel batches
+            invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
+            
+            if invalid_ind:
+                # Use thread pool for batch evaluation
+                with concurrent.futures.ThreadPoolExecutor(max_workers=min(16, CPU_THREADS)) as executor:
+                    fitnesses = list(executor.map(toolbox.evaluate, invalid_ind))
+                    for ind, fit in zip(invalid_ind, fitnesses):
+                        ind.fitness.values = fit
+            
+            # Replace population with offspring
+            pop[:] = offspring
+            
+            # Log progress
+            best_ind = tools.selBest(pop, 1)[0]
+            best_fitness = best_ind.fitness.values[0]
+            
+            self._log('info', f"Generation {g+1}/{generations}: Best fitness = {best_fitness}")
+        
+        # Retrieve best individual
+        best_ind = tools.selBest(pop, 1)[0]
+        
+        # Convert best individual to parameters
+        best_params = {}
+        for i, param_name in enumerate(self.param_names):
+            if genome[i][2]:  # If integer
+                best_params[param_name] = int(best_ind[i])
+            else:
+                best_params[param_name] = float(best_ind[i])
+                
+        # Do final evaluation
+        final_result = self._evaluate_parameters(best_params)
+        
+        # Calculate execution time
+        execution_time = time.time() - start_time
+        
+        # Compile results
+        all_evaluations = sorted(
+            self.all_individuals,
+            key=lambda x: x.get('fitness', 0),
+            reverse=True
+        )
+        
+        # Compile analysis
+        valid_results = [r for r in self.all_individuals if r.get('valid', False)]
+        
+        # Generate parameter analysis
+        parameter_analysis = None
+        if valid_results:
+            parameter_analyzer = ParameterAnalyzer(self.log)
+            parameter_analysis = parameter_analyzer.analyze_parameter_distribution(
+                valid_results, optimization_metric
+            )
+        
+        # Final result set
+        results = {
+            'best_parameters': best_params,
+            'best_performance': final_result['performance'] if final_result else None,
+            'all_evaluations': all_evaluations,
+            'parameter_analysis': parameter_analysis,
+            'metadata': {
+                'run_date': self.current_utc,
+                'run_by': self.current_user,
+                'execution_time_seconds': execution_time,
+                'optimization_metric': optimization_metric,
+                'min_trades': min_trades,
+                'population_size': population_size,
+                'generations': generations,
+                'mutation_prob': mutation_prob,
+                'crossover_prob': crossover_prob,
+                'tournament_size': tournament_size,
+                'implementation': force_implementation,
+                'total_evaluations': self.evaluated_individuals,
+                'valid_evaluations': self.valid_results_count,
+                'data_period': {
+                    'start': df.index[0].strftime('%Y-%m-%d %H:%M:%S'),
+                    'end': df.index[-1].strftime('%Y-%m-%d %H:%M:%S'),
+                    'candle_count': len(df)
+                }
+            }
+        }
+        
+        # Final progress update
+        if self.progress_callback:
+            self.progress_callback({
+                'completed': self.total_expected_evaluations,
+                'total': self.total_expected_evaluations,
+                'progress_pct': 100,
+                'elapsed': execution_time,
+                'remaining': 0,
+                'valid_results': self.valid_results_count,
+                'top_combinations': self._get_top_combinations()
+            })
+        
+        # Clean up creator classes to avoid warning when running multiple optimizations
+        if hasattr(creator, 'FitnessMax'):
+            del creator.FitnessMax
+        if hasattr(creator, 'Individual'):
+            del creator.Individual
+            
+        # Explicitly clean up resources
+        if hasattr(self.supertrend, 'cleanup_resources'):
+            self.supertrend.cleanup_resources()
+        
+        self._log('info', f"Genetic optimization completed in {execution_time:.2f} seconds")
+        
+        return results
+    
+    def _get_top_combinations(self, top_n=5):
+        """Extract top combinations for progress updates"""
+        valid_results = [r for r in self.all_individuals if r.get('valid', False)]
+        if not valid_results:
+            return []
+        
+        # Sort by fitness (which is the optimization metric)
+        sorted_results = sorted(
+            valid_results,
+            key=lambda x: x.get('fitness', 0),
+            reverse=True
+        )[:top_n]
+        
+        # Format for display
+        top_combos = []
+        for result in sorted_results:
+            params = result['parameters']
+            perf = result.get('performance', {})
+            
+            top_combos.append({
+                'parameters': params,
+                'performance': {
+                    'win_rate': perf.get('win_rate', 0),
+                    'profit_factor': perf.get('profit_factor', 0),
+                    'total_profit_pct': perf.get('total_profit_pct', 0),
+                    self.optimization_metric: perf.get(self.optimization_metric, 0)
+                }
+            })
+        
+        return top_combos
+    
+    def _evaluate_parameters(self, params: Dict[str, float]) -> Dict[str, Any]:
+        """Evaluate a set of parameters with GPU optimization"""
+        try:
+            # Extract parameters
+            atr_length = int(params.get('atr_length', 14))
+            factor = float(params.get('factor', 3.0))
+            buffer = float(params.get('buffer_multiplier', 0.3))
+            stop = float(params.get('hard_stop_distance', 50))
+            
+            # Calculate SuperTrend with GPU
+            df_st = self.supertrend.calculate(
+                self.df, atr_length, factor, buffer, 
+                force_implementation=self.force_implementation,
+                precomputed_patterns=self.precomputed_patterns
+            )
+            
+            # Process signals to get trades
+            trades = self.trade_processor.process_supertrend_signals(df_st, stop, self.time_exit_hours)
+            
+            # Check if meets minimum trades requirement
+            if len(trades) < self.min_trades:
+                return None
+            
+            # Calculate performance metrics
+            performance = self.performance_calculator.calculate_performance(trades)
+            
+            return {
+                'parameters': params,
+                'performance': performance,
+                'trade_count': len(trades)
+            }
+            
+        except Exception as e:
+            self._log('error', f"Error evaluating parameters: {str(e)}")
+            return None
+
 
 class ParameterAnalyzer:
     """
@@ -4542,523 +5713,6 @@ class ParameterAnalyzer:
             insights.append(f"- {param}: {value}")
         
         return insights
-
-class GeneticOptimizer:
-    """
-    Genetic algorithm for parameter optimization
-    """
-    
-    def __init__(self, log_manager: LogManager = None, progress_callback=None):
-        self.log = log_manager
-        self.current_utc = "2025-06-25 14:59:21"  # Updated timestamp
-        self.current_user = "arullr001"           # Updated username
-        self.progress_callback = progress_callback  # Add progress callback
-        
-        # Initialize components
-        self.supertrend = SuperTrend(log_manager)
-        self.trade_processor = TradeProcessor(log_manager)
-        self.performance_calculator = PerformanceCalculator(log_manager)
-    
-    def _log(self, level: str, message: str):
-        """Log message if log_manager is available"""
-        if self.log:
-            if level == 'info':
-                self.log.info(message)
-            elif level == 'debug':
-                self.log.debug(message)
-            elif level == 'warning':
-                self.log.warning(message)
-            elif level == 'error':
-                self.log.error(message)
-    
-    def optimize(self, df: pd.DataFrame, 
-                param_ranges: Dict[str, Tuple[float, float]],
-                optimization_metric: str = 'profit_factor',
-                min_trades: int = 10,
-                time_exit_hours: float = 48.0,
-                population_size: int = 30,
-                generations: int = 10,
-                mutation_rate: float = 0.1,
-                crossover_rate: float = 0.7) -> Dict[str, Any]:
-        """
-        Run genetic algorithm optimization for SuperTrend parameters
-        
-        Args:
-            df: DataFrame with OHLC data
-            param_ranges: Dictionary with parameter ranges as (min, max) tuples
-            optimization_metric: Metric to optimize ('profit_factor', 'win_rate', etc.)
-            min_trades: Minimum number of trades required for a valid result
-            time_exit_hours: Exit trade after this many hours
-            population_size: Size of the population in each generation
-            generations: Number of generations to evolve
-            mutation_rate: Probability of mutation for each gene
-            crossover_rate: Probability of crossover between parents
-            
-        Returns:
-            Dictionary with optimization results
-        """
-        self._log('info', f"Running genetic optimization using {optimization_metric} as target metric")
-        
-        start_time = time.time()
-        total_evaluations = population_size * (generations + 1)  # Initial population + one per generation
-        
-        # Define parameter ranges
-        param_definitions = [
-            {
-                'name': 'atr_length',
-                'min': param_ranges.get('atr_length', (10, 30))[0],
-                'max': param_ranges.get('atr_length', (10, 30))[1],
-                'type': 'int'
-            },
-            {
-                'name': 'factor',
-                'min': param_ranges.get('factor', (1.0, 5.0))[0],
-                'max': param_ranges.get('factor', (1.0, 5.0))[1],
-                'type': 'float'
-            },
-            {
-                'name': 'buffer_multiplier',
-                'min': param_ranges.get('buffer', (0.1, 0.5))[0],
-                'max': param_ranges.get('buffer', (0.1, 0.5))[1],
-                'type': 'float'
-            },
-            {
-                'name': 'hard_stop_distance',
-                'min': param_ranges.get('stop', (10, 50))[0],
-                'max': param_ranges.get('stop', (10, 50))[1],
-                'type': 'float'
-            }
-        ]
-        
-        # Track history of best performers
-        history = []
-        completed_evaluations = 0
-        valid_results_count = 0
-        
-        # Send initial progress update
-        if self.progress_callback:
-            self.progress_callback({
-                'completed': 0,
-                'total': total_evaluations,
-                'progress_pct': 0,
-                'elapsed': 0,
-                'remaining': 0,
-                'valid_results': 0,
-                'top_combinations': []
-            })
-        
-        # Generate initial population
-        self._log('info', f"Generating initial population of {population_size} individuals")
-        population = self._generate_initial_population(param_definitions, population_size)
-        
-        # Evaluate initial population
-        self._log('info', "Evaluating initial population")
-        evaluated_population = self._evaluate_population(
-            population, df, param_definitions, 
-            optimization_metric, min_trades, time_exit_hours
-        )
-        
-        # Update progress
-        completed_evaluations += population_size
-        valid_results_count += sum(1 for ind in evaluated_population if ind['fitness'] > 0)
-        
-        if self.progress_callback:
-            elapsed = time.time() - start_time
-            progress_pct = (completed_evaluations / total_evaluations) * 100
-            remaining = (elapsed / completed_evaluations) * (total_evaluations - completed_evaluations) if completed_evaluations > 0 else 0
-            
-            self.progress_callback({
-                'completed': completed_evaluations,
-                'total': total_evaluations,
-                'progress_pct': progress_pct,
-                'elapsed': elapsed,
-                'remaining': remaining,
-                'valid_results': valid_results_count,
-                'top_combinations': self._get_top_combinations(evaluated_population, param_definitions, optimization_metric)
-            })
-        
-        # Record initial best
-        best_individual = max(evaluated_population, key=lambda x: x['fitness'])
-        history.append(best_individual)
-        
-        self._log('info', f"Initial best: {best_individual['fitness']:.4f}, params: {best_individual['individual']}")
-        
-        # Run generations
-        for generation in range(generations):
-            self._log('info', f"Generation {generation+1}/{generations}")
-            
-            # Select parents
-            parents = self._select_parents(evaluated_population)
-            
-            # Create offspring
-            offspring = self._create_offspring(
-                parents, param_definitions, 
-                crossover_rate, mutation_rate
-            )
-            
-            # Evaluate offspring
-            evaluated_offspring = self._evaluate_population(
-                offspring, df, param_definitions,
-                optimization_metric, min_trades, time_exit_hours
-            )
-            
-            # Update progress
-            completed_evaluations += len(offspring)
-            valid_results_count += sum(1 for ind in evaluated_offspring if ind['fitness'] > 0)
-            
-            if self.progress_callback:
-                elapsed = time.time() - start_time
-                progress_pct = (completed_evaluations / total_evaluations) * 100
-                remaining = (elapsed / completed_evaluations) * (total_evaluations - completed_evaluations) if completed_evaluations > 0 else 0
-                
-                # Combine current population for top combinations
-                combined_population = evaluated_population + evaluated_offspring
-                
-                self.progress_callback({
-                    'completed': completed_evaluations,
-                    'total': total_evaluations,
-                    'progress_pct': progress_pct,
-                    'elapsed': elapsed,
-                    'remaining': remaining,
-                    'valid_results': valid_results_count,
-                    'top_combinations': self._get_top_combinations(combined_population, param_definitions, optimization_metric)
-                })
-            
-            # Create next generation (elitism: keep the best individual)
-            next_generation = [best_individual] + evaluated_offspring
-            next_generation = sorted(next_generation, key=lambda x: x['fitness'], reverse=True)[:population_size]
-            
-            # Update population and best individual
-            evaluated_population = next_generation
-            current_best = max(evaluated_population, key=lambda x: x['fitness'])
-            
-            if current_best['fitness'] > best_individual['fitness']:
-                best_individual = current_best
-                self._log('info', f"New best: {best_individual['fitness']:.4f}, params: {best_individual['individual']}")
-            
-            history.append(current_best)
-        
-        # Convert best parameters to correct format
-        best_params = {}
-        for i, param in enumerate(param_definitions):
-            name = param['name']
-            value = best_individual['individual'][i]
-            
-            if param['type'] == 'int':
-                value = int(value)
-            
-            best_params[name] = value
-        
-        # Run final evaluation with best parameters
-        final_result = self._evaluate_parameters(df, best_params, time_exit_hours)
-        
-        execution_time = time.time() - start_time
-        
-        # Prepare results
-        generation_stats = []
-        for gen, ind in enumerate(history):
-            generation_stats.append({
-                'generation': gen,
-                'best_fitness': ind['fitness'],
-                'parameters': {param_definitions[i]['name']: ind['individual'][i] for i in range(len(param_definitions))}
-            })
-        
-        # Compile results
-        results = {
-            'best_parameters': best_params,
-            'best_performance': final_result['performance'] if final_result else None,
-            'generation_stats': generation_stats,
-            'trade_count': final_result['trade_count'] if final_result else 0,
-            'metadata': {
-                'run_date': self.current_utc,
-                'run_by': self.current_user,
-                'execution_time_seconds': execution_time,
-                'optimization_metric': optimization_metric,
-                'min_trades': min_trades,
-                'population_size': population_size,
-                'generations': generations,
-                'mutation_rate': mutation_rate,
-                'crossover_rate': crossover_rate,
-                'data_period': {
-                    'start': df.index[0].strftime('%Y-%m-%d %H:%M:%S'),
-                    'end': df.index[-1].strftime('%Y-%m-%d %H:%M:%S'),
-                    'candle_count': len(df)
-                }
-            }
-        }
-        
-        # Generate parameter analysis
-        if final_result:
-            parameter_analyzer = ParameterAnalyzer(self.log)
-            
-            # Convert individual data to format compatible with parameter analyzer
-            analyzable_results = []
-            for individual in evaluated_population:
-                if individual['fitness'] > 0:  # Only include valid results
-                    params = {}
-                    for i, param in enumerate(param_definitions):
-                        params[param['name']] = individual['individual'][i]
-                    
-                    analyzable_results.append({
-                        'parameters': params,
-                        'performance': {optimization_metric: individual['fitness']}
-                    })
-            
-            if analyzable_results:
-                results['parameter_analysis'] = parameter_analyzer.analyze_parameter_distribution(
-                    analyzable_results, optimization_metric
-                )
-        
-        # Final progress update
-        if self.progress_callback:
-            self.progress_callback({
-                'completed': total_evaluations,
-                'total': total_evaluations,
-                'progress_pct': 100,
-                'elapsed': execution_time,
-                'remaining': 0,
-                'valid_results': valid_results_count,
-                'top_combinations': self._get_top_combinations(evaluated_population, param_definitions, optimization_metric)
-            })
-        
-        self._log('info', f"Genetic optimization completed in {execution_time:.2f} seconds")
-        
-        return results
-    
-    def _get_top_combinations(self, population, param_definitions, optimization_metric, top_n=5):
-        """Extract top combinations from population for progress updates"""
-        # Sort by fitness
-        sorted_pop = sorted(population, key=lambda x: x['fitness'], reverse=True)[:top_n]
-        
-        # Format for display
-        top_combos = []
-        for individual in sorted_pop:
-            params = {}
-            for i, param_def in enumerate(param_definitions):
-                params[param_def['name']] = individual['individual'][i]
-                if param_def['type'] == 'int':
-                    params[param_def['name']] = int(params[param_def['name']])
-            
-            perf = individual.get('performance', {})
-            if not perf:  # If performance is not stored, create minimal dict
-                perf = {
-                    'win_rate': 0,
-                    'profit_factor': 0,
-                    'total_profit_pct': 0,
-                    optimization_metric: individual['fitness']
-                }
-            
-            top_combos.append({
-                'parameters': params,
-                'performance': perf
-            })
-        
-        return top_combos
-    
-    def _generate_initial_population(self, param_definitions: List[Dict], 
-                                   population_size: int) -> List[List[float]]:
-        """Generate initial random population"""
-        population = []
-        
-        for _ in range(population_size):
-            individual = []
-            for param in param_definitions:
-                min_val = param['min']
-                max_val = param['max']
-                
-                if param['type'] == 'int':
-                    value = random.randint(int(min_val), int(max_val))
-                else:
-                    value = random.uniform(min_val, max_val)
-                
-                individual.append(value)
-            
-            population.append(individual)
-        
-        return population
-    
-    def _evaluate_population(self, population: List[List[float]], df: pd.DataFrame,
-                           param_definitions: List[Dict], optimization_metric: str,
-                           min_trades: int, time_exit_hours: float) -> List[Dict]:
-        """Evaluate all individuals in the population"""
-        evaluated_population = []
-        
-        # Process individuals in parallel
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            futures = {}
-            
-            for individual in population:
-                # Convert individual to parameter dictionary
-                params = {}
-                for i, param in enumerate(param_definitions):
-                    name = param['name']
-                    value = individual[i]
-                    
-                    if param['type'] == 'int':
-                        value = int(value)
-                    
-                    params[name] = value
-                
-                # Submit evaluation task
-                future = executor.submit(
-                    self._evaluate_parameters, 
-                    df, params, time_exit_hours
-                )
-                futures[future] = individual
-            
-            # Process results
-            for future in concurrent.futures.as_completed(futures):
-                individual = futures[future]
-                try:
-                    result = future.result()
-                    
-                    if result and result['trade_count'] >= min_trades:
-                        fitness = result['performance'].get(optimization_metric, 0.0)
-                    else:
-                        fitness = 0.0
-                        
-                    evaluated_population.append({
-                        'individual': individual,
-                        'fitness': fitness,
-                        'trade_count': result['trade_count'] if result else 0,
-                        'performance': result['performance'] if result else None
-                    })
-                    
-                except Exception as e:
-                    self._log('error', f"Error evaluating individual: {str(e)}")
-                    evaluated_population.append({
-                        'individual': individual,
-                        'fitness': 0.0,
-                        'trade_count': 0,
-                        'performance': None
-                    })
-        
-        return evaluated_population
-    
-    def _select_parents(self, evaluated_population: List[Dict]) -> List[List[float]]:
-        """Select parents for next generation using tournament selection"""
-        population_size = len(evaluated_population)
-        parents = []
-        
-        # Calculate total fitness for fitness proportionate selection
-        total_fitness = sum(ind['fitness'] for ind in evaluated_population)
-        
-        # Perform selection
-        for _ in range(population_size):
-            if total_fitness > 0:
-                # Fitness proportionate selection
-                r = random.uniform(0, total_fitness)
-                cumulative_fitness = 0
-                for ind in evaluated_population:
-                    cumulative_fitness += ind['fitness']
-                    if cumulative_fitness >= r:
-                        parents.append(ind['individual'])
-                        break
-                else:
-                    # Fallback if we didn't select anyone (shouldn't happen)
-                    parents.append(random.choice(evaluated_population)['individual'])
-            else:
-                # If total fitness is zero, select randomly
-                parents.append(random.choice(evaluated_population)['individual'])
-        
-        return parents
-    
-    def _create_offspring(self, parents: List[List[float]], param_definitions: List[Dict],
-                        crossover_rate: float, mutation_rate: float) -> List[List[float]]:
-        """Create offspring through crossover and mutation"""
-        offspring = []
-        n_parents = len(parents)
-        
-        for i in range(0, n_parents, 2):
-            parent1 = parents[i]
-            parent2 = parents[i+1] if i+1 < n_parents else parents[0]
-            
-            # Apply crossover
-            if random.random() < crossover_rate:
-                child1, child2 = self._crossover(parent1, parent2)
-            else:
-                child1, child2 = parent1.copy(), parent2.copy()
-            
-            # Apply mutation
-            child1 = self._mutate(child1, param_definitions, mutation_rate)
-            child2 = self._mutate(child2, param_definitions, mutation_rate)
-            
-            offspring.append(child1)
-            if len(offspring) < n_parents:
-                offspring.append(child2)
-        
-        return offspring
-    
-    def _crossover(self, parent1: List[float], parent2: List[float]) -> Tuple[List[float], List[float]]:
-        """Perform single-point crossover between parents"""
-        n = len(parent1)
-        if n <= 1:
-            return parent1.copy(), parent2.copy()
-            
-        # Select crossover point
-        crossover_point = random.randint(1, n-1)
-        
-        # Create children
-        child1 = parent1[:crossover_point] + parent2[crossover_point:]
-        child2 = parent2[:crossover_point] + parent1[crossover_point:]
-        
-        return child1, child2
-    
-    def _mutate(self, individual: List[float], param_definitions: List[Dict], 
-              mutation_rate: float) -> List[float]:
-        """Apply mutation to an individual"""
-        mutated = individual.copy()
-        
-        for i, param in enumerate(param_definitions):
-            # Apply mutation with given probability
-            if random.random() < mutation_rate:
-                min_val = param['min']
-                max_val = param['max']
-                
-                # Apply small mutation
-                if param['type'] == 'int':
-                    # For integers, add or subtract a small value
-                    change = random.choice([-2, -1, 1, 2])
-                    new_value = individual[i] + change
-                    # Ensure within bounds
-                    mutated[i] = max(min_val, min(max_val, new_value))
-                else:
-                    # For floats, apply percentage change
-                    change_pct = random.uniform(-0.2, 0.2)  # -20% to +20%
-                    change = individual[i] * change_pct
-                    new_value = individual[i] + change
-                    # Ensure within bounds
-                    mutated[i] = max(min_val, min(max_val, new_value))
-        
-        return mutated
-    
-    def _evaluate_parameters(self, df: pd.DataFrame, params: Dict[str, float], time_exit_hours: float) -> Dict[str, Any]:
-        """Evaluate a set of parameters"""
-        try:
-            # Extract parameters
-            atr_length = int(params.get('atr_length', 14))
-            factor = float(params.get('factor', 3.0))
-            buffer = float(params.get('buffer_multiplier', 0.3))
-            stop = float(params.get('hard_stop_distance', 50))
-            
-            # Calculate SuperTrend
-            df_st = self.supertrend.calculate(df, atr_length, factor, buffer)
-            
-            # Process signals to get trades
-            trades = self.trade_processor.process_supertrend_signals(df_st, stop, time_exit_hours)
-            
-            # Calculate performance metrics
-            performance = self.performance_calculator.calculate_performance(trades)
-            
-            return {
-                'parameters': params,
-                'performance': performance,
-                'trade_count': len(trades)
-            }
-            
-        except Exception as e:
-            self._log('error', f"Error evaluating parameters: {str(e)}")
-            return None
 
 
 # ==============================================================================
@@ -6823,7 +7477,6 @@ Generated by SuperTrendAnalyzer v1.0 | {self.current_utc}
 # ==============================================================================
 
 class OptimizationWorker(QThread):
-    """Worker thread to run optimization without freezing the GUI"""
     progress_signal = pyqtSignal(dict)  # Signal for progress updates
     result_signal = pyqtSignal(dict)    # Signal for final results
     
@@ -6838,59 +7491,81 @@ class OptimizationWorker(QThread):
         self.parallelism = parallelism
         self.stop_requested = False
         
+
     def run(self):
         try:
             # Get the current process name for debugging
             process_name = multiprocessing.current_process().name
             print(f"Starting optimization in process: {process_name}")
-        
+            
+            # Create a wrapper for the progress_callback to ensure thread safety
+            def thread_safe_progress_callback(progress_info):
+                if not self.stop_requested:
+                    self.progress_signal.emit(progress_info)
+            
             # Select optimizer based on method
             if self.method == "Grid Search":
-                optimizer = GridSearchOptimizer(progress_callback=self.update_progress)
-                results = optimizer.optimize(
-                    self.df, self.param_ranges, self.optimization_metric,
-                    self.min_trades, self.time_exit_hours, self.parallelism
-                )
-
-            # Select optimizer based on method
-            if self.method == "Grid Search":
-                optimizer = GridSearchOptimizer(progress_callback=self.update_progress)
+                # Force thread parallelism regardless of what was selected
+                self.parallelism = "thread"  # Override with thread parallelism 
+                optimizer = GridSearchOptimizer(progress_callback=thread_safe_progress_callback)
+                
+                # Log the override
+                print(f"Forcing thread parallelism for optimization")
+                
                 results = optimizer.optimize(
                     self.df, self.param_ranges, self.optimization_metric,
                     self.min_trades, self.time_exit_hours, self.parallelism
                 )
             elif self.method == "Bayesian Optimization":
-                optimizer = BayesianOptimizer(progress_callback=self.update_progress)
+                # Also force thread parallelism for Bayesian optimization
+                optimizer = BayesianOptimizer(progress_callback=thread_safe_progress_callback)
+                
+                print(f"Forcing thread parallelism for Bayesian optimization")
+                
+                # Note: Bayesian optimization doesn't have a parallelism parameter directly,
+                # but the internal implementation should use threading
                 results = optimizer.optimize(
                     self.df, self.param_ranges, self.optimization_metric,
                     self.min_trades, self.time_exit_hours
                 )
             elif self.method == "Genetic Algorithm":
-                optimizer = GeneticOptimizer(progress_callback=self.update_progress)
+                # Also force thread parallelism for Genetic algorithm
+                optimizer = GeneticOptimizer(progress_callback=thread_safe_progress_callback)
+                
+                print(f"Forcing thread parallelism for Genetic algorithm")
+                
+                # The genetic algorithm should be modified to use threading internally
                 results = optimizer.optimize(
                     self.df, self.param_ranges, self.optimization_metric,
                     self.min_trades, self.time_exit_hours
                 )
-            
-            # Emit final results
-            self.result_signal.emit(results)
+                
+            # Check if stop was requested before emitting final results
+            if not self.stop_requested:
+                self.result_signal.emit(results)
             
         except Exception as e:
+            print(f"ERROR in worker: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
+            self.progress_signal.emit({'error': str(e), 'traceback': traceback.format_exc()})
             # Signal that an error occurred
             self.progress_signal.emit({'error': str(e)})
+            print(f"Worker thread exception: {str(e)}\n{traceback.format_exc()}")
     
     def update_progress(self, progress_info):
         """Callback function for optimizer to report progress"""
         if not self.stop_requested:
             # Print to console to confirm progress is being generated
             print(f"Progress update: {progress_info.get('completed', 0)}/{progress_info.get('total', 0)}")
-        
+            
             # Make sure we emit the signal
             self.progress_signal.emit(progress_info)
     
     def stop(self):
         """Stop the optimization process"""
         self.stop_requested = True
+        
 
 class SuperTrendGUI(QMainWindow):
     """
@@ -8180,6 +8855,11 @@ Probability of Profit: {monte_carlo.get('probability', {}).get('profit', 0)*100:
             QMessageBox.warning(self, "Warning", "Please load data first.")
             return
         
+        if "No CUDA-compatible GPU detected" in self.log.get_log_entries():
+            force_implementation = "cpu"
+            self._log('info', "Forcing CPU implementation as no GPU detected")
+        
+        
         try:
             # Get parameter ranges from UI
             param_ranges = {
@@ -8254,10 +8934,15 @@ Probability of Profit: {monte_carlo.get('probability', {}).get('profit', 0)*100:
                 min_trades, self.time_exit_input.value(), parallelism
             )
             
-            # VERIFY SIGNAL CONNECTIONS
-            print("Connecting optimization worker signals")
-            self.optimization_worker.progress_signal.connect(self.update_optimization_progress)
-            self.optimization_worker.result_signal.connect(self.optimization_completed)
+            # Clear any existing signal connections to avoid duplicate signals
+            try:  #add this line - add safe disconnection
+                self.optimization_worker.progress_signal.disconnect()
+                self.optimization_worker.result_signal.disconnect()
+            except TypeError:
+                # No connections to disconnect
+                pass
+            
+            
             
             # Connect signals
             self.optimization_worker.progress_signal.connect(self.update_optimization_progress)
@@ -8278,6 +8963,9 @@ Probability of Profit: {monte_carlo.get('probability', {}).get('profit', 0)*100:
 
     def update_optimization_progress(self, data):
         """Update UI with optimization progress"""
+        
+        self._log('info', f"Progress: {data.get('completed', 0)}/{data.get('total', 0)} combinations ({data.get('progress_pct', 0):.1f}%)")
+        
         # Print to console to confirm callback is being called
         print(f"UI received progress update: {data.get('completed', 0)}/{data.get('total', 0)}")
     
@@ -8315,28 +9003,45 @@ Probability of Profit: {monte_carlo.get('probability', {}).get('profit', 0)*100:
         self.remaining_combinations_label.setText(str(total - completed))
         self.valid_results_label.setText(str(data.get('valid_results', 0)))
         
-        # Force UI update - CRITICAL ADDITION
-        QApplication.processEvents()
-                
-        # Update top combinations table
-        top_combinations = data.get('top_combinations', [])
-        for row, combo in enumerate(top_combinations[:5]):
-            params = combo['parameters']
-            perf = combo['performance']
-            
-            # Update table cells
-            self.top_combinations_table.setItem(row, 0, QTableWidgetItem(str(params.get('atr_length', ''))))
-            self.top_combinations_table.setItem(row, 1, QTableWidgetItem(f"{params.get('factor', ''):.2f}"))
-            self.top_combinations_table.setItem(row, 2, QTableWidgetItem(f"{params.get('buffer_multiplier', ''):.2f}"))
-            self.top_combinations_table.setItem(row, 3, QTableWidgetItem(str(params.get('hard_stop_distance', ''))))
-            
-            win_rate = perf.get('win_rate', 0) * 100
-            self.top_combinations_table.setItem(row, 4, QTableWidgetItem(f"{win_rate:.2f}%"))
-            
-            profit_factor = perf.get('profit_factor', 0)
-            self.top_combinations_table.setItem(row, 5, QTableWidgetItem(f"{profit_factor:.2f}"))
         
-        # Refresh the UI
+        # Update top combinations table
+        try:
+            top_combinations = data.get('top_combinations', [])
+            for row, combo in enumerate(top_combinations[:5]):  # Ensure we only process 5 rows max
+                if row >= 5:  # Safety check
+                    break
+                
+                params = combo.get('parameters', {})
+                perf = combo.get('performance', {})
+            
+                # Safety check that the table has enough rows
+                if self.top_combinations_table.rowCount() <= row:
+                    continue
+                
+                # Update table cells safely with type checking
+                if 'atr_length' in params:
+                    self.top_combinations_table.setItem(row, 0, QTableWidgetItem(str(params['atr_length'])))
+            
+                if 'factor' in params:
+                    self.top_combinations_table.setItem(row, 1, QTableWidgetItem(f"{params['factor']:.2f}"))
+            
+                if 'buffer_multiplier' in params:
+                    self.top_combinations_table.setItem(row, 2, QTableWidgetItem(f"{params['buffer_multiplier']:.2f}"))
+            
+                if 'hard_stop_distance' in params:
+                    self.top_combinations_table.setItem(row, 3, QTableWidgetItem(str(params['hard_stop_distance'])))
+            
+                if 'win_rate' in perf:
+                    win_rate = perf['win_rate'] * 100
+                    self.top_combinations_table.setItem(row, 4, QTableWidgetItem(f"{win_rate:.2f}%"))
+            
+                if 'profit_factor' in perf:
+                    profit_factor = perf['profit_factor']
+                    self.top_combinations_table.setItem(row, 5, QTableWidgetItem(f"{profit_factor:.2f}"))
+        except Exception as e:
+            print(f"Error updating combinations table: {str(e)}")
+    
+        # Force UI refresh immediately
         QApplication.processEvents()
 
     def optimization_completed(self, results):
