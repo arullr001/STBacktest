@@ -9065,11 +9065,11 @@ Probability of Profit: {monte_carlo.get('probability', {}).get('profit', 0)*100:
 
     def stop_optimization(self):
         """Stop the running optimization"""
-        if hasattr(self, 'optimization_worker') and self.optimization_worker.isRunning():
+        if hasattr(self, 'optimization_worker') and self.optimization_worker and self.optimization_worker.isRunning():
             self.optimization_worker.stop()
             self.optimization_worker.wait()
             self.stop_optimization_button.setEnabled(False)
-            self.status_bar.showMessage("Optimization stopped by user")  
+            self.status_bar.showMessage("Optimization stopped by user")
 
     def update_optimization_results(self):
         """Update optimization results display"""
