@@ -1,0 +1,30 @@
+{
+    "trades": [],
+    "performance": {
+        "total_trades": 0,
+        "winning_trades": 0,
+        "losing_trades": 0,
+        "win_rate": 0,
+        "total_return": 0,
+        "profit_factor": 0,
+        "max_drawdown": 0,
+        "avg_win": 0,
+        "avg_loss": 0,
+        "avg_duration_hours": 0,
+        "max_consecutive_wins": 0,
+        "max_consecutive_losses": 0,
+        "sharpe_ratio": 0,
+        "final_equity": 10000,
+        "exit_reasons": {}
+    },
+    "equity_curve": [],
+    "parameters": {
+        "atr_period": 14,
+        "factor": 3.2,
+        "buffer_multiplier": 0.15,
+        "hard_stop_atr_multiple": 2.5,
+        "time_exit_hours": 0,
+        "min_trend_strength": 5,
+        "min_candles_between_trades": 10
+    }
+}
